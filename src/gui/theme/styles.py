@@ -199,6 +199,62 @@ STYLES = {
 
     "value_label": "color: {text_secondary}; font-size: 14px;",
 
+    # ---- Preset popup (home screen, opened from the preset banner) ------
+    "preset_popup": """
+        QFrame#presetPopup {{
+            background-color: {bg_elevated};
+            border: 1px solid {card_border};
+            border-radius: 14px;
+        }}
+    """,
+
+    # A preset row is a QPushButton holding labels, so the row's own text is
+    # empty; [checked="true"] is how the selection is shown.
+    "preset_row": """
+        QPushButton#presetRow {{
+            background-color: transparent;
+            border: none;
+            border-radius: 10px;
+            text-align: left;
+            padding: 0px;
+        }}
+        QPushButton#presetRow:hover {{ background-color: {surface_hover}; }}
+        QPushButton#presetRow:checked {{
+            background-color: {surface_hover};
+            border: 1px solid {accent};
+        }}
+    """,
+
+    "preset_mini_button": """
+        QPushButton#presetMiniButton {{
+            background-color: {surface_hover};
+            color: {text_primary};
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            padding: 0px 10px;
+        }}
+        QPushButton#presetMiniButton:hover {{ background-color: {divider}; }}
+        QPushButton#presetMiniButton:disabled {{ color: {text_disabled}; }}
+    """,
+
+    "preset_mini_danger": """
+        QPushButton#presetMiniButton {{
+            background-color: {error_hover};
+            color: {text_inverse};
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 0px 14px;
+        }}
+        QPushButton#presetMiniButton:hover {{ background-color: {error}; }}
+        QPushButton#presetMiniButton:disabled {{
+            background-color: {surface_hover};
+            color: {text_disabled};
+        }}
+    """,
+
     # ---- Pages -----------------------------------------------------------
     "page_bg": "background-color: {bg_primary};",
     "scroll_area": "QScrollArea {{ background-color: {bg_primary}; border: none; }}",

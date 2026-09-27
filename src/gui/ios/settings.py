@@ -4,7 +4,6 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QInputDialog,
     QFileDialog, QDialog
 )
-from typing import Optional
 from pathlib import Path
 
 from src.gui.ios.components import (
@@ -13,10 +12,15 @@ from src.gui.ios.components import (
 from src.gui.pages.main.settings import available_languages
 from src.controllers.video_handler import set_ignore_frame_limit
 from src.controllers.preset_manager import PresetManager
-from src.controllers.hotload import HotLoad, confirm_flagged
+from src.controllers.hotload import HotLoad
 from src.tweaks.tweaks import tweaks, TweakID
 from src.gui.thread_workers.apply_worker import ResetPairingThread
 from src.gui.theme import ColorThemeManager, AccentPicker
+from src.gui.ios.preset_menu import (
+    load_preset_flow, save_preset_flow, delete_preset_flow,
+    export_preset_flow, partial_export_preset_flow, import_preset_flow,
+    preset_subtitle,
+)
 
 
 class IOSSettingsPage(QWidget):
@@ -794,37 +798,23 @@ class IOSSettingsPage(QWidget):
         for meta in self.preset_manager.list_presets_with_metadata():
             name = meta["name"]
             desc = meta.get("description", "")
-            model = meta.get("device_model", "Unknown")
-            ios = meta.get("ios_version", "Unknown")
-            tags = meta.get("tags", [])
-            tag_str = "  #" + " #".join(tags) if tags else ""
+            sub = preset_subtitle(meta)
             if desc:
-                item_text = f"{name}\n  {desc}  ({model} \u2022 iOS {ios}){tag_str}"
+                item_text = f"{name}\n  {desc}  ({sub})"
             else:
-                item_text = f"{name}  ({model} \u2022 iOS {ios}){tag_str}"
+                item_text = f"{name}  ({sub})"
             item = QListWidgetItem(item_text)
             self.preset_list.addItem(item)
             item.setData(Qt.UserRole, name)
 
+
     def _on_preset_save(self):
-        name = self.preset_name_txt.text().strip()
-        desc = self.preset_desc_txt.text().strip()
-        if not name:
-            QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Save Preset"),
-                QCoreApplication.translate("Nugget", "Enter a name for this preset."))
-            return
-        if self.preset_manager.save_preset(
-                name, desc, tags=[],
-                device_model=self.window.device_manager.get_current_device_model() or "",
-                ios_version=self.window.device_manager.get_current_device_version() or ""):
+        if save_preset_flow(
+                self, self.window, self.preset_manager,
+                self.preset_name_txt.text(), self.preset_desc_txt.text()):
             self.preset_name_txt.clear()
             self.preset_desc_txt.clear()
             self.refresh_presets()
-        else:
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Save Preset"),
-                QCoreApplication.translate("Nugget", "Failed to save the preset."))
 
     def _on_preset_load(self):
         if self.preset_list.currentRow() < 0:
@@ -832,208 +822,49 @@ class IOSSettingsPage(QWidget):
                 self, QCoreApplication.translate("Nugget", "Load Preset"),
                 QCoreApplication.translate("Nugget", "Select a preset to load first."))
             return
-        item_text = self.preset_list.currentItem().text()
-        name = self.preset_list.currentItem().data(Qt.UserRole) or item_text.split("\n")[0].strip()
-        meta = self.preset_manager.get_preset_metadata(name)
-        desc = meta.get("description", "") if meta else ""
-        model = meta.get("device_model", "Unknown") if meta else "Unknown"
-        ios = meta.get("ios_version", "Unknown") if meta else "Unknown"
-        confirm = QMessageBox.question(
-            self, QCoreApplication.translate("Nugget", "Load Preset"),
-            QCoreApplication.translate(
-                "Nugget",
-                "Load preset \"{0}\"?\n\nDescription: {1}\nDevice: {2} \u2022 iOS {3}\n\nThis will replace your current configuration."
-            ).format(name, desc, model, ios))
-        if confirm != QMessageBox.StandardButton.Yes:
+        name = self._selected_preset_name()
+        if not name:
             return
-        dm = self.window.device_manager
-        hotload = HotLoad(getattr(self.window, "settings", None))
-        hidden_feats = self.preset_manager.preset_hidden_feature_names(
-            name, hotload,
-            device_version=dm.get_current_device_version(),
-            device_model=dm.get_current_device_model())
-        if hidden_feats:
+        load_preset_flow(self, self.window, self.preset_manager, name)
+
+    def _selected_preset_name(self) -> str:
+        """Name of the preset selected in the list ("" when nothing is)."""
+        item = self.preset_list.currentItem()
+        if item is None:
+            return ""
+        return item.data(Qt.UserRole) or item.text().split("\n")[0].strip()
+
+    def _require_selection(self, title: str, message: str) -> str:
+        name = self._selected_preset_name()
+        if not name:
             QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Hidden Features Skipped"),
-                QCoreApplication.translate(
-                    "Nugget",
-                    "This preset contains features that are currently hidden by "
-                    "the safety rules for this device:\n\n\u2022 {0}\n\n"
-                    "They will NOT be loaded, so applying may not match the "
-                    "preset's intended state.").format("\n\u2022 ".join(hidden_feats)))
-        compat_msg = self._daemon_compat_warning(name, meta)
-        if compat_msg:
-            reply = QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Daemon Compatibility"),
-                compat_msg,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-        if self.preset_manager.preset_has_daemon_changes(name):
-            rule = hotload.rule_for(
-                "Daemons",
-                device_version=dm.get_current_device_version(),
-                device_model=dm.get_current_device_model())
-            if rule is not None and not confirm_flagged(rule, self):
-                return
-        if not self.preset_manager.load_preset(name):
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Load Preset"),
-                QCoreApplication.translate("Nugget", "Failed to load the preset."))
-            return
-        self.window.settings.setValue("last_loaded_preset", name)
-        self.window._sync_settings()
-        QMessageBox.information(
-            self, QCoreApplication.translate("Nugget", "Load Preset"),
-            QCoreApplication.translate(
-                "Nugget",
-                "Preset \"{0}\" loaded.\n\nGoldenNugget will now restart to apply the changes.").format(name))
-        self._restart_app()
+                self, QCoreApplication.translate("Nugget", title),
+                QCoreApplication.translate("Nugget", message))
+            return ""
+        return name
 
-    @staticmethod
-    def _major_version(ver: str):
-        try:
-            return int(str(ver).split(".")[0])
-        except (ValueError, TypeError, IndexError):
-            return None
-
-    @staticmethod
-    def _device_type(model: str) -> str:
-        model = str(model or "")
-        if model.lower().startswith("iphone"):
-            return "iPhone"
-        if model.lower().startswith("ipad"):
-            return "iPad"
-        return ""
-
-    def _daemon_compat_warning(self, name: str, meta) -> Optional[str]:
-        if not self.preset_manager.preset_has_daemon_changes(name):
-            return None
-        cur_ver = self.window.device_manager.get_current_device_version() or ""
-        cur_model = self.window.device_manager.get_current_device_model() or ""
-        pr_ver = (meta.get("ios_version") or "") if meta else ""
-        pr_model = (meta.get("device_model") or "") if meta else ""
-
-        pr_major = self._major_version(pr_ver)
-        cur_major = self._major_version(cur_ver)
-        mismatches = []
-        if pr_major is not None and cur_major is not None and pr_major != cur_major:
-            mismatches.append(f"iOS {pr_major}x vs current iOS {cur_major}x")
-        pr_type = self._device_type(pr_model)
-        cur_type = self._device_type(cur_model)
-        if pr_type and cur_type and pr_type != cur_type:
-            mismatches.append(f"{pr_type} vs current {cur_type}")
-        if not mismatches:
-            return None
-        return (
-            "This preset contains daemon modifications that were saved for a "
-            "different device:\n\n"
-            + "\n".join("\u2022 " + m for m in mismatches)
-            + "\n\nDaemons are sensitive to the iOS version and device type, and "
-              "applying incompatible ones can bootloop your device. "
-              "Proceed with caution."
-        )
 
     def _on_preset_delete(self):
-        if self.preset_list.currentRow() < 0:
-            QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Delete Preset"),
-                QCoreApplication.translate("Nugget", "Select a preset to delete first."))
-            return
-        item_text = self.preset_list.currentItem().text()
-        name = self.preset_list.currentItem().data(Qt.UserRole) or item_text.split("\n")[0].strip()
-        confirm = QMessageBox.question(
-            self, QCoreApplication.translate("Nugget", "Delete Preset"),
-            QCoreApplication.translate("Nugget", "Delete preset \"{0}\"?").format(name))
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        if self.preset_manager.delete_preset(name):
+        name = self._require_selection(
+            "Delete Preset", "Select a preset to delete first.")
+        if name and delete_preset_flow(self, self.preset_manager, name):
             self.refresh_presets()
-        else:
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Delete Preset"),
-                QCoreApplication.translate("Nugget", "Failed to delete the preset."))
 
     def _on_preset_export(self):
-        if self.preset_list.currentRow() < 0:
-            QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Export Preset"),
-                QCoreApplication.translate("Nugget", "Select a preset to export first."))
-            return
-        item_text = self.preset_list.currentItem().text()
-        name = self.preset_list.currentItem().data(Qt.UserRole) or item_text.split("\n")[0].strip()
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, QCoreApplication.translate("Nugget", "Export Preset"),
-            f"{name}.json",
-            QCoreApplication.translate("Nugget", "JSON Files (*.json)"))
-        if not file_path:
-            return
-        if self.preset_manager.export_preset(name, file_path):
-            QMessageBox.information(
-                self, QCoreApplication.translate("Nugget", "Export Preset"),
-                QCoreApplication.translate("Nugget", "Preset exported to:\n{0}").format(file_path))
-        else:
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Export Preset"),
-                QCoreApplication.translate("Nugget", "Failed to export preset."))
+        name = self._require_selection(
+            "Export Preset", "Select a preset to export first.")
+        if name:
+            export_preset_flow(self, self.preset_manager, name)
 
     def _on_preset_partial_export(self):
-        if self.preset_list.currentRow() < 0:
-            QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Partial Export"),
-                QCoreApplication.translate("Nugget", "Select a preset to export first."))
-            return
-        item_text = self.preset_list.currentItem().text()
-        name = self.preset_list.currentItem().data(Qt.UserRole) or item_text.split("\n")[0].strip()
-
-        from src.gui.dialogs.preset_partial_export import PartialExportDialog
-        dialog = PartialExportDialog(parent=self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        selected = dialog.selected_tweaks()
-        if not selected:
-            QMessageBox.warning(
-                self, QCoreApplication.translate("Nugget", "Partial Export"),
-                QCoreApplication.translate("Nugget",
-                    "Select at least one tweak to export."))
-            return
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, QCoreApplication.translate("Nugget", "Partial Export"),
-            f"{name}.json",
-            QCoreApplication.translate("Nugget", "JSON Files (*.json)"))
-        if not file_path:
-            return
-        if self.preset_manager.export_preset(name, file_path, include=selected):
-            QMessageBox.information(
-                self, QCoreApplication.translate("Nugget", "Partial Export"),
-                QCoreApplication.translate("Nugget", "Preset exported to:\n{0}").format(file_path))
-        else:
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Partial Export"),
-                QCoreApplication.translate("Nugget", "Failed to export preset."))
+        name = self._require_selection(
+            "Partial Export", "Select a preset to export first.")
+        if name:
+            partial_export_preset_flow(self, self.preset_manager, name)
 
     def _on_preset_import(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, QCoreApplication.translate("Nugget", "Import Preset"),
-            "",
-            QCoreApplication.translate("Nugget", "JSON Files (*.json)"))
-        if not file_path:
-            return
-        success, result = self.preset_manager.import_preset(file_path)
-        if success:
+        if import_preset_flow(self, self.preset_manager):
             self.refresh_presets()
-            QMessageBox.information(
-                self, QCoreApplication.translate("Nugget", "Import Preset"),
-                QCoreApplication.translate("Nugget", "Preset \"{0}\" imported successfully.").format(result))
-        else:
-            QMessageBox.critical(
-                self, QCoreApplication.translate("Nugget", "Import Preset"),
-                QCoreApplication.translate("Nugget", "Failed to import preset:\n{0}").format(result))
-
-    def _restart_app(self):
-        import os
-        import sys
-        os.execl(sys.executable, sys.executable, *sys.argv)
 
     # ---------- about ----------
 

@@ -84,8 +84,10 @@ class PresetBanner(QFrame):
 class PresetWidget(QWidget):
     """Home-screen container: header + active-preset banner + manage action.
 
-    ``on_manage`` is called when the user taps the manage button; set it to
-    navigate to the preset manager section of the app.
+    Tapping *Manage* opens an animated popup (``PresetPopup``) that lists every
+    preset, lets the user pick one and exposes the full action set (save, load,
+    delete, export, partial export, import, open in Settings). ``on_manage`` is
+    only used as a fallback when no window is available to own the popup.
     """
 
     def __init__(self, window=None, on_manage=None, ios_style: bool = True,
@@ -94,6 +96,7 @@ class PresetWidget(QWidget):
         self.window = window
         self._on_manage = on_manage
         self._ios_style = ios_style
+        self._popup = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -122,8 +125,34 @@ class PresetWidget(QWidget):
         self.banner._retheme()
 
     def _on_manage_pressed(self):
+        """Open the animated preset popup under the Manage button.
+
+        Falls back to ``on_manage`` (navigate to the Settings page) when there
+        is no window to own the popup, or when the popup cannot be created.
+        """
+        if self.window is not None and self._ios_style:
+            try:
+                from src.gui.ios.preset_menu import show_preset_popup
+                if self._popup is not None:
+                    try:
+                        self._popup.close()
+                    except RuntimeError:
+                        # already destroyed by Qt when its parent went away
+                        self._popup = None
+                self._popup = show_preset_popup(
+                    self.window, self.banner.manage_btn, parent=self.window)
+                self._popup.closed.connect(self._forget_popup)
+                return
+            except Exception:
+                # never let the banner break the home page: fall back
+                self._popup = None
         if self._on_manage is not None:
             self._on_manage()
+
+    def _forget_popup(self):
+        popup, self._popup = self._popup, None
+        if popup is not None:
+            popup.deleteLater()
 
     def refresh(self):
         """Recompute and display the currently active preset."""

@@ -70,6 +70,41 @@ Dark/light mode + accent color customization for the whole GUI.
   frozen app via `--add-data=src/qt:src/qt`).
 - `src/qt/mainwindow_ui.py` is generated from Qt Designer — do not edit;
   theme the chrome via `_apply_global_stylesheet` instead.
+- **The preset popup is a child widget, never a window.** `PresetPopup`
+  (`src/gui/ios/preset_menu.py`) parents itself to the main window and draws
+  over it with `raise_()`. Do **not** turn it into a top-level `Qt.Popup` or
+  `Qt.Tool`: a Popup relies on Qt's implicit mouse/keyboard grab, which not
+  every platform plugin provides (when the grab fails it is silently dismissed
+  right after `show()`), and *any* top-level window gets its own decorations
+  and taskbar entry — which looks like a stray window instead of a list growing
+  out of the button. Click-away/Escape still need the app-level `_DismissOnOutsideClick`
+  filter, which builds its hit rect with `popup.mapToGlobal(QPoint(0, 0))` +
+  `popup.size()` (a child widget has no frame, so `frameGeometry()` is wrong).
+  The filter holds the popup through a `weakref` and swallows `RuntimeError`, so
+  a popup whose window was destroyed (or interpreter shutdown) can never leave a
+  dangling target.
+- **Position a child panel in parent coordinates, never global.** `move()` is
+  parent-relative, so `_panel_pos()` maps the anchor with
+  `anchor.mapTo(parent, ...)` and clamps against `parent.rect()`. Computing the
+  spot from `mapToGlobal` and handing it to `move()` offsets the panel by the
+  window's frame (title bar + border). The panel is right-aligned to the button
+  with a 6px gap and **always opens downwards** — it never flips upwards. When
+  the button sits too low for the whole list, `_fit_below_anchor()` pins the
+  scroll area to `setFixedHeight(...)` and resizes the frame explicitly
+  (`adjustSize()` is not enough: a `QScrollArea`'s `sizeHint()` keeps reporting
+  the full content height, so a `setMaximumHeight` cap alone never shrinks the
+  panel). `show_popup()` clears that fixed height again on every open, or the
+  panel stays short after the window grows. The popup also installs an event
+  filter on the parent and closes on Resize/Move/WindowStateChange, otherwise
+  it detaches from the button.
+- **Never animate `pos` on a top-level window.** Doing so makes Qt hide and
+  re-place it (and for a popup, dismiss it). `PresetPopup` slides an inner
+  `_body` widget instead, with `SLIDE_PX` of extra top margin reserved as the
+  travel room; the fade is a `QPropertyAnimation` on a `QGraphicsOpacityEffect`
+  (a plain `QWidget` has no `opacity` property). A close request is ignored
+  until that fade-out finishes — guarded by `_allow_close`, or the recursive
+  `close()` from `_finish_close` starts a second fade and the window never
+  closes.
 - **TEMP: Classic UI removed** — `src/qt/mainwindow.ui` is deleted (the
   generated `mainwindow_ui.py` stays committed and keeps working at runtime),
   the Settings "iOS-style Interface" switch is hidden, `ThemeManager.load_theme`
@@ -122,6 +157,32 @@ Internal, PosterBoard, Daemons, Status Bar, Templates). `hidden_features()` /
 `hidden_tweak_names()` / `feature_for()` resolve what is hidden for a given
 device/model/app. All gating honours the kill switch (`hotload_enabled` pref);
 when off, nothing is hidden or blocked.
+
+## Preset Popup (src/gui/ios/preset_menu.py)
+
+Tapping *Manage* on the home-screen preset banner opens `PresetPopup` instead of
+navigating to Settings. The module is deliberately split in two:
+
+- **Actions** — `load_preset_flow`, `save_preset_flow`, `delete_preset_flow`,
+  `export_preset_flow`, `partial_export_preset_flow`, `import_preset_flow`,
+  plus `daemon_compat_warning` and `preset_subtitle`. Each takes a preset
+  **name** (never a list row) and owns its confirm/safety dialogs, so the
+  Settings page (`IOSSettingsPage`, which resolves the name off
+  `preset_list` via `_selected_preset_name`/`_require_selection`) and the popup
+  share one implementation and cannot drift.
+- **The panel** — `PresetPopup` is deliberately minimal: a `_PresetRow` list
+  (name + `model • iOS` + tags, ✓ on the active preset) with a single footer row
+  holding nothing but **Delete, pinned to the far right** (behind a stretch). A
+  single click *selects* a preset, a **double click applies it** (which restarts
+  the app, so it must not be a single click). It scrolls at `MAX_VISIBLE_ROWS`.
+  The full toolkit (save / import / export / partial export) lives only on the
+  Settings page — do not add it back to the popup.
+- `_PresetRow` declares its own `doubleClicked` signal and emits it from
+  `mouseDoubleClickEvent`: `QAbstractButton` has no `doubleClicked` in the
+  pinned Qt version.
+- `PresetWidget._on_manage_pressed` falls back to `on_manage` when
+  `ios_style` is False (the classic page still navigates) or when no window is
+  available to own the popup.
 
 ## Tweak Registry (src/tweaks/registry.py)
 
