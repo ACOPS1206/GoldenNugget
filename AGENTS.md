@@ -45,6 +45,18 @@ Dark/light mode + accent color customization for the whole GUI.
   `MainWindow._apply_global_stylesheet`; it sets `QLabel color` via the
   `QWidget { color: {text_primary} }` rule, so bare labels inside styled
   rows pick up the theme without their own `_retheme`.
+- **Raised surfaces need an explicit transparent background.** A `QLabel` that
+  carries its own stylesheet is a styled-background widget, so Qt fills it with
+  the palette window color — invisible on `bg_secondary` cards, but a dark box
+  on a lighter surface (e.g. the Home tiles on `bg_tertiary`). Always add
+  `background-color: transparent;` to such label styles.
+- **Icons bigger than their viewBox**: use
+  `theme_pixmap(resource, color, size, dpr)` (scales the SVG *before* tinting, so
+  11x11/16x16 sources stay crisp) instead of `theme_icon()`, which rasterizes at
+  the intrinsic size and would be blurry. The Home feature tiles
+  (`src/gui/ios/home.py`) are the reference use: one 68px icon per tile, all six
+  feature tiles in a single row, name + muted subtitle underneath,
+  `_TileCard._retheme` → `t("home_tile")`.
 - **One font everywhere**: the bundled `Inter` variable font is
   registered in `main_app.py` (`QFontDatabase.addApplicationFont` +
   `app.setFont`) and its family is pinned by the `global` template via the

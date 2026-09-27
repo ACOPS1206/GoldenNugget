@@ -2,25 +2,46 @@ from PySide6.QtCore import Qt, QCoreApplication, Slot, QTimer, QSize, QEvent
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QComboBox, QFrame, QSizePolicy
+    QComboBox, QSizePolicy, QScrollArea
 )
 
 from src.gui.ios.components import IOSCard, IOSPrimaryButton, IOSDangerButton
 from src.gui.preset_widget import PresetWidget
-from src.gui.theme import t, ColorThemeManager, theme_icon
+from src.gui.theme import t, ColorThemeManager, theme_icon, theme_pixmap
+
+# Feature tile icon per home card (keyed by the card title).
+_FEATURE_ICONS = {
+    "PosterBoard": ":/icon/wallpaper.svg",
+    "Tweaks": ":/icon/toggles.svg",
+    "Daemons": ":/icon/hdd.svg",
+    "Status Bar": ":/icon/app-indicator.svg",
+    "Icon Themes": ":/icon/brush.svg",
+    "Passcode Theme": ":/icon/lock.svg",
+}
+
+
+class _TileCard(IOSCard):
+    """A home feature tile (icon + name). Same look as a card, plus hover."""
+
+    def _retheme(self):
+        self.setStyleSheet(t("home_tile"))
 
 
 class _CardGrid(QWidget):
-    """Responsive grid for the home feature cards.
+    """Responsive grid for the home feature tiles.
 
-    Reflows the visible cards into columns based on the available width.
-    Cards hidden on purpose (Status Bar on iOS 27, HotLoad-hidden features)
+    Reflows the visible tiles into columns based on the available width, up to
+    ``MAX_COLUMNS``: all six features stay on one row at every window size the
+    app allows (the window has a 1000px minimum and the iOS shell hides the
+    sidebar, so the home page always has room for the full row).
+    Tiles hidden on purpose (Status Bar on iOS 27, HotLoad-hidden features)
     are tracked via their Show/Hide events, so the grid stays correct even
-    before the page itself has been shown. Hidden cards are dropped from the
+    before the page itself has been shown. Hidden tiles are dropped from the
     layout entirely and collapse cleanly.
     """
-    MIN_CARD_WIDTH = 200
+    MIN_CARD_WIDTH = 140
     SPACING = 12
+    MAX_COLUMNS = 6
 
     def __init__(self, cards, parent=None):
         super().__init__(parent)
@@ -56,13 +77,13 @@ class _CardGrid(QWidget):
         self._reflow()
 
     def _col_count(self, count: int) -> int:
-        """Pick the largest column count whose cards stay wide enough.
+        """Pick the largest column count whose tiles stay wide enough.
 
-        Prefers filling the row (4 columns) whenever each card still gets at
-        least ``MIN_CARD_WIDTH``, so the last card doesn't fall to a second
-        row when the window has room for it.
+        Never more than ``MAX_COLUMNS``, so a wide window must not stretch the
+        tiles into a long strip; narrower windows drop a column instead of
+        squeezing the tiles below a readable width.
         """
-        for n in range(count, 0, -1):
+        for n in range(min(count, self.MAX_COLUMNS), 0, -1):
             avail = self.width() - self.SPACING * (n - 1)
             if avail / n >= self.MIN_CARD_WIDTH:
                 return n
@@ -80,7 +101,7 @@ class _CardGrid(QWidget):
             return
         for card in self._cards:
             self._grid.removeWidget(card)
-        for col in range(4):
+        for col in range(self.MAX_COLUMNS):
             self._grid.setColumnStretch(col, 1 if col < len(include) else 0)
         for r, c, w in target:
             self._grid.addWidget(w, r, c)
@@ -88,13 +109,31 @@ class _CardGrid(QWidget):
 
 
 class IOSHomePage(QWidget):
+    # Feature tile: a big icon over the name. The tile height is left to the
+    # layout so a subtitle that wraps to two lines grows the whole row.
+    TILE_ICON_PX = 68
+
     def __init__(self, window, parent=None):
         super().__init__(parent)
         self.window = window
         self.setObjectName("iosContainer")
         self._c = ColorThemeManager.instance().colors
+        # (icon label, icon resource, title label, subtitle label) per tile
+        self._tiles = []
 
-        layout = QVBoxLayout(self)
+        # Scroll area: the tile grid must never be squeezed below the tile
+        # content height, so a short window scrolls instead of overlapping.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        self._scroll = scroll
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
@@ -195,6 +234,9 @@ class IOSHomePage(QWidget):
 
         layout.addStretch()
 
+        # Paint the scroll area background for the active palette right away
+        # (the shared _retheme only re-runs on a theme change).
+        self._retheme()
         self.update_status()
         self.update_device_info()
         self.refresh_preset_widget()
@@ -223,6 +265,7 @@ class IOSHomePage(QWidget):
     def _retheme(self):
         self._c = ColorThemeManager.instance().colors
         c = self._c
+        self._scroll.setStyleSheet(f"background-color: {c.bg_primary}; border: none;")
         if self._logo.pixmap() is None or self._logo.pixmap().isNull():
             self._logo.setStyleSheet(f"background-color: {c.bg_secondary}; border-radius: 14px;")
         self._title.setStyleSheet(t("home_title"))
@@ -234,28 +277,11 @@ class IOSHomePage(QWidget):
         self._apply_icon(self._settings_btn, ":/icon/gear.svg")
         self.process_status_lbl.setStyleSheet(t("process_status_green"))
         self.update_status()
-        # Rebuild card headers for new colors
-        for card, title, sub_text in [
-            (self.posterboard_card, "PosterBoard", "Animated wallpapers & templates"),
-            (self.tweaks_card, "Tweaks", "Customize system settings"),
-            (self.daemons_card, "Daemons", "Disable system daemons"),
-            (self.statusbar_card, "Status Bar", "Customize the status bar"),
-            (self.icon_themes_card, "Icon Themes", "Themed app icons & labels"),
-            (self.passcode_theme_card, "Passcode Theme", "Custom keypad theme (.passthm)"),
-        ]:
-            header = card.findChild(QFrame)
-            if header:
-                header.setStyleSheet(
-                    f"background-color: {c.bg_secondary}; border-top-left-radius: 12px; "
-                    f"border-top-right-radius: 12px;")
-            title_lbl = card.findChild(QLabel)
-            if title_lbl:
-                title_lbl.setStyleSheet(
-                    f"font-size: 17px; font-weight: 600; color: {c.text_primary};")
-            # Find subtitle label (second label in card)
-            labels = card.findChildren(QLabel)
-            if len(labels) > 1:
-                labels[1].setStyleSheet(f"font-size: 14px; color: {c.text_secondary};")
+        # Feature tiles: recolor the icon and restyle the two labels
+        for icon_lbl, icon_res, title_lbl, sub_lbl in self._tiles:
+            self._paint_tile_icon(icon_lbl, icon_res)
+            title_lbl.setStyleSheet(t("home_tile_title"))
+            sub_lbl.setStyleSheet(t("home_tile_subtitle"))
 
     def populate_device_picker(self):
         self.device_combo.blockSignals(True)
@@ -355,36 +381,51 @@ class IOSHomePage(QWidget):
         self.cards_grid.reflow()
 
     def _make_card(self, title: str, subtitle: str, page_index: int) -> IOSCard:
-        c = self._c
-        card = IOSCard()
+        """One home feature tile: a big themed icon with the name below it."""
+        card = _TileCard()
+        card.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Preferred)
+
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(0, 0, 0, 0)
-        card_layout.setSpacing(0)
+        card_layout.setContentsMargins(10, 20, 10, 16)
+        card_layout.setSpacing(12)
+        card_layout.setAlignment(Qt.AlignHCenter)
 
-        header = QFrame()
-        header.setFixedHeight(56)
-        header.setStyleSheet(
-            f"background-color: {c.bg_secondary}; border-top-left-radius: 12px; "
-            f"border-top-right-radius: 12px;")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 8, 16, 8)
-        header_title = QLabel(
-            QCoreApplication.translate("Nugget", title), header)
-        header_title.setStyleSheet(
-            f"font-size: 17px; font-weight: 600; color: {c.text_primary};")
-        header_layout.addWidget(header_title, 1, Qt.AlignCenter)
-        card_layout.addWidget(header)
+        icon_res = _FEATURE_ICONS.get(title, ":/icon/compass.svg")
+        icon_lbl = QLabel(card)
+        icon_lbl.setFixedSize(self.TILE_ICON_PX, self.TILE_ICON_PX)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        # transparent, so the label never paints the palette window color over
+        # the tile (see the home_tile_* styles)
+        icon_lbl.setStyleSheet("background-color: transparent;")
+        self._paint_tile_icon(icon_lbl, icon_res)
+        card_layout.addWidget(icon_lbl, 0, Qt.AlignHCenter)
 
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 16, 16, 16)
-        content_layout.setSpacing(8)
-        sub = QLabel(QCoreApplication.translate("Nugget", subtitle), content)
-        sub.setStyleSheet(f"font-size: 14px; color: {c.text_secondary};")
-        sub.setWordWrap(True)
-        content_layout.addWidget(sub)
-        card_layout.addWidget(content)
+        title_lbl = QLabel(QCoreApplication.translate("Nugget", title), card)
+        title_lbl.setWordWrap(True)
+        title_lbl.setAlignment(Qt.AlignCenter)
+        title_lbl.setStyleSheet(t("home_tile_title"))
+        card_layout.addWidget(title_lbl, 0, Qt.AlignHCenter)
+
+        sub_lbl = QLabel(QCoreApplication.translate("Nugget", subtitle), card)
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setAlignment(Qt.AlignCenter)
+        sub_lbl.setStyleSheet(t("home_tile_subtitle"))
+        card_layout.addWidget(sub_lbl, 0, Qt.AlignHCenter)
+
+        card_layout.addStretch(1)
+
+        # kept for _retheme(): icons are recolored, labels restyled
+        self._tiles.append((icon_lbl, icon_res, title_lbl, sub_lbl))
 
         card.mousePressEvent = lambda e: self.switch_to_ios_page(page_index)
         card.setCursor(Qt.PointingHandCursor)
+        card.setToolTip(QCoreApplication.translate("Nugget", subtitle))
         return card
+
+    def _paint_tile_icon(self, label: QLabel, icon_res: str):
+        """Draw a feature icon at tile size (and screen density) in the
+        current text color."""
+        label.setPixmap(theme_pixmap(
+            icon_res, self._c.text_primary, self.TILE_ICON_PX,
+            self.devicePixelRatioF()))

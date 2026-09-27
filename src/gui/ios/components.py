@@ -1,4 +1,8 @@
-from PySide6.QtCore import Qt, QCoreApplication, Signal as pyqtSignal
+from PySide6.QtCore import (
+    Qt, QCoreApplication, Signal as pyqtSignal, QSize, QRectF,
+    QPropertyAnimation, QEasingCurve, Property,
+)
+from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QFrame,
     QSizePolicy, QDialog, QDialogButtonBox, QLineEdit, QSpinBox,
@@ -417,31 +421,96 @@ class IOSDangerButton(QPushButton):
 
 
 class IOSSwitch(QPushButton):
-    """iOS-style toggle switch"""
+    """iOS-style toggle switch: the track color fades while the knob slides.
+
+    Track and knob are drawn in ``paintEvent`` (rather than a stylesheet plus a
+    child ``QLabel``) so the knob can move on every animation frame without
+    child-widget repaint artifacts. ``switch_progress`` runs 0.0 = off to
+    1.0 = on and drives both the knob position and the track color.
+    """
+
+    TRACK_SIZE = QSize(51, 31)
+    KNOB_SIZE = 27
+    KNOB_INSET = 2
+    ANIM_MS = 180
+    KNOB_COLOR = QColor("#FFFFFF")
+
     def __init__(self, checked=False, parent=None):
         super().__init__(parent)
         self.setCheckable(True)
-        self.setChecked(checked)
-        self.setFixedSize(51, 31)
+        self.setFixedSize(self.TRACK_SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self._knob = QLabel(self)
-        self._knob.setFixedSize(27, 27)
-        self._knob.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._knob.setStyleSheet(t("switch_knob"))
-        self.toggled.connect(self._update_style)
-        self._update_style()
+        self.setAttribute(Qt.WA_Hover, True)
+
+        self._progress = 1.0 if checked else 0.0
+        self._anim = QPropertyAnimation(self, b"switch_progress", self)
+        self._anim.setDuration(self.ANIM_MS)
+
+        # set the state before connecting: building a page must not animate
+        self.setChecked(checked)
+        self.toggled.connect(self._on_toggled)
         _auto_retheme(self)
 
-    def _retheme(self):
-        self._update_style()
-        self._knob.setStyleSheet(t("switch_knob"))
+    def _get_progress(self) -> float:
+        return self._progress
 
-    def _update_style(self):
+    def _set_progress(self, value):
+        self._progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    switch_progress = Property(float, _get_progress, _set_progress)
+
+    def _on_toggled(self, checked: bool):
+        if not self.isVisible():
+            # not on screen (page still being built): nothing to animate
+            self._anim.stop()
+            self._set_progress(1.0 if checked else 0.0)
+            return
+        self._animate_to(1.0 if checked else 0.0)
+
+    def _animate_to(self, target: float):
+        # restart from the current position, so rapid clicks blend instead of
+        # snapping back to an end state
+        self._anim.stop()
+        self._anim.setStartValue(self._progress)
+        self._anim.setEndValue(target)
+        self._anim.setEasingCurve(
+            QEasingCurve.Type.OutCubic if target > self._progress
+            else QEasingCurve.Type.InOutCubic)
+        self._anim.start()
+
+    def _retheme(self):
+        # a theme change must not animate: stop and snap to the current state
+        self._anim.stop()
+        self._set_progress(1.0 if self.isChecked() else 0.0)
+
+    def paintEvent(self, event):
         c = ColorThemeManager.instance().colors
-        checked = self.isChecked()
-        track = c.success if checked else c.border
-        self.setStyleSheet(f"QPushButton {{ background-color: {track}; border-radius: 15px; border: none; }}")
-        self._knob.move(22 if checked else 2, 2)
+        p = self._progress
+        off = QColor(c.border)
+        on = QColor(c.success)
+        track = QColor(
+            round(off.red() + (on.red() - off.red()) * p),
+            round(off.green() + (on.green() - off.green()) * p),
+            round(off.blue() + (on.blue() - off.blue()) * p),
+        )
+
+        knob = float(self.KNOB_SIZE)
+        inset = self.KNOB_INSET
+        travel = self.width() - knob - 2 * inset
+        knob_x = inset + travel * p
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(track)
+        painter.drawRoundedRect(
+            QRectF(0, 0, self.width(), self.height()),
+            self.height() / 2.0, self.height() / 2.0)
+        painter.setBrush(self.KNOB_COLOR)
+        painter.drawRoundedRect(
+            QRectF(knob_x, inset, knob, knob), knob / 2.0, knob / 2.0)
+        painter.end()
 
 
 class IOSValueLabel(QLabel):

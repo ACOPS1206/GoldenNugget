@@ -194,9 +194,8 @@ STYLES = {
         QPushButton#cancelBtn:hover {{ background-color: {surface_hover}; }}
     """,
 
-    "switch_track_on": "background-color: {success}; border-radius: 15px; border: none;",
-    "switch_track_off": "background-color: {border}; border-radius: 15px; border: none;",
-    "switch_knob": "background-color: #FFFFFF; border-radius: 13px; border: none;",
+    # IOSSwitch paints its own track/knob (it animates the knob position and
+    # fades the track color), so there is no switch stylesheet here.
 
     "value_label": "color: {text_secondary}; font-size: 14px;",
 
@@ -349,9 +348,29 @@ STYLES = {
         QPushButton:hover {{ background-color: {surface_hover}; }}
     """,
 
-    "home_card_header": "background-color: {bg_secondary}; border-radius: 12px 12px 0 0;",
-    "home_card_title": "font-size: 17px; font-weight: 600; color: {text_primary};",
-    "home_card_subtitle": "color: {text_secondary}; font-size: 13px;",
+    # Home feature tile: one big icon with the feature name underneath, all
+    # six tiles in one row. Replaces the old header+subtitle home cards. The
+    # tile uses bg_tertiary (not bg_secondary) so it actually reads as a
+    # raised tile against the page background, like the home screen mockup.
+    "home_tile": """
+        IOSCard {{
+            background-color: {bg_tertiary};
+            border-radius: 14px;
+            border: 1px solid transparent;
+        }}
+        IOSCard:hover {{ border-color: {accent}; }}
+    """,
+
+    "home_tile_title": (
+        "font-size: 16px; font-weight: 600; color: {text_primary}; "
+        # a styled QLabel paints its palette window color by default, which
+        # shows as a dark box on the raised tile — keep it transparent
+        "background-color: transparent;"
+    ),
+    "home_tile_subtitle": (
+        "color: {text_secondary}; font-size: 12px; "
+        "background-color: transparent;"
+    ),
 
     "process_status_green": "color: {success}; font-size: 14px; font-weight: 500;",
     "process_status_red": "color: {error}; font-size: 14px; font-weight: 500;",

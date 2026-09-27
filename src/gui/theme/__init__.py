@@ -1,3 +1,4 @@
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 
 from src.gui.theme.theme_manager import ColorThemeManager
@@ -34,7 +35,29 @@ def theme_icon(resource_path: str, color_hex: str) -> QIcon:
     return QIcon(QPixmap.fromImage(img))
 
 
+def theme_pixmap(resource_path: str, color_hex: str, size: int,
+                 dpr: float = 1.0) -> QPixmap:
+    """Rasterize a monochrome SVG at *size* logical pixels, tinted to a color.
+
+    Unlike ``theme_icon`` the icon is scaled by the SVG engine *before* the
+    tint is applied, so icons with a small viewBox (11x11, 16x16) stay crisp
+    when blown up to home-tile size. ``dpr`` renders extra device pixels on
+    HiDPI screens and sets the pixmap's device pixel ratio accordingly.
+    """
+    scale = max(1.0, float(dpr))
+    pm = QPixmap(int(round(size * scale)), int(round(size * scale)))
+    pm.setDevicePixelRatio(scale)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.drawPixmap(pm.rect(), QIcon(resource_path).pixmap(pm.size()))
+    painter.setCompositionMode(
+        QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(pm.rect(), QColor(color_hex))
+    painter.end()
+    return pm
+
+
 __all__ = [
     "ColorThemeManager", "DARK", "ACCENT_PRESETS", "STYLES", "FONT_FAMILY",
-    "AccentPicker", "t", "themed_stylesheet", "theme_icon",
+    "AccentPicker", "t", "themed_stylesheet", "theme_icon", "theme_pixmap",
 ]
