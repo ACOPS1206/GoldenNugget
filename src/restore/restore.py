@@ -389,9 +389,13 @@ async def _restore_protective_backup(lc: LockdownClient, backup_root: str,
                 "The device dropped the connection during the data restore.\n\n"
                 "Your data is not lost — the protective backup taken before "
                 "the wipe is kept on this computer.\n\n"
-                "Do not erase the phone or set it up as new. Reconnect the "
-                "iPhone, keep it unlocked with the screen on, and apply again "
-                "so the restore can complete.")
+                "A common cause is Find My still being on: iOS refuses to "
+                "restore a backup while Find My (iCloud ▸ Find My iPhone) is "
+                "enabled. Turn Find My off (Settings ▸ [your name] ▸ Find My), "
+                "keep the iPhone unlocked with the screen on, and apply again "
+                "so the restore can complete.\n\n"
+                "Do not erase the phone or set it up as new — the protective "
+                "backup on this computer is the only copy of your data.")
         ) from e
 
     await async_retry(
