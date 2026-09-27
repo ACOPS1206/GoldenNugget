@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui.ios.components import (
-    IOSSectionHeader, IOSCard, IOSSettingsRow,
+    IOSCollapsibleSection, IOSCard, IOSSettingsRow,
     IOSSwitch, TextInputDialog, NumberInputDialog, decimals_for_step
 )
 from src.gui.ios.compat import is_tweak_compatible
@@ -43,6 +43,29 @@ def _hidden_sections() -> set:
     """Registry Sections whose feature is hidden, so we skip rendering them."""
     hidden = _hidden_feature_names()
     return {s for s, feat in _SECTION_FEATURES.items() if feat in hidden}
+
+
+# Collapsed tweak sections are remembered per section name, so a rebuild (or a
+# restart) comes back exactly as the user left it.
+_COLLAPSED_KEY = "tweaks_collapsed_sections"
+
+
+def _load_collapsed_sections() -> set:
+    """Section names the user collapsed."""
+    from src.controllers.settings import Settings
+    raw = Settings("settings").value(_COLLAPSED_KEY, "", type=str) or ""
+    return {part.strip() for part in str(raw).split(",") if part.strip()}
+
+
+def _save_collapsed_section(name: str, collapsed: bool):
+    from src.controllers.settings import Settings
+    store = Settings("settings")
+    names = _load_collapsed_sections()
+    if collapsed:
+        names.add(name)
+    else:
+        names.discard(name)
+    store.setValue(_COLLAPSED_KEY, ",".join(sorted(names)))
 
 
 class IOSSectionContent(QWidget):
@@ -110,7 +133,8 @@ class IOSSectionContent(QWidget):
             return is_tweak_compatible(tweak_id, device_ver, is_iphone)
 
         # Helper to create a switch row for boolean tweaks
-        def make_switch(tweak_id: TweakID, title: str, description: str = ""):
+        def make_switch(tweak_id: TweakID, title: str, description: str = "",
+                        target: QVBoxLayout = None):
             if tweak_id not in tweaks:
                 return
             tweak = tweaks[tweak_id]
@@ -138,10 +162,11 @@ class IOSSectionContent(QWidget):
                 switch.setToolTip(description)
                 card.setToolTip(description)
 
-            layout.addWidget(card)
+            (target or layout).addWidget(card)
 
         # Helper for text input tweaks
-        def make_text_input(tweak_id: TweakID, title: str, description: str = ""):
+        def make_text_input(tweak_id: TweakID, title: str, description: str = "",
+                            target: QVBoxLayout = None):
             if tweak_id not in tweaks:
                 return
             if not is_compatible(tweak_id):
@@ -159,11 +184,12 @@ class IOSSectionContent(QWidget):
                 row.setText(f"{title}  ({current})")
             row.clicked.connect(lambda: self._show_text_input_dialog(tweak_id, title, current, row))
             card_layout.addWidget(row)
-            layout.addWidget(card)
+            (target or layout).addWidget(card)
 
         # Helper for number input tweaks
         def make_number_input(tweak_id: TweakID, title: str, min_val: int = 0, max_val: int = 999,
-                              description: str = "", step: float = 1.0):
+                              description: str = "", step: float = 1.0,
+                              target: QVBoxLayout = None):
             if tweak_id not in tweaks:
                 return
             if not is_compatible(tweak_id):
@@ -185,7 +211,7 @@ class IOSSectionContent(QWidget):
             row.clicked.connect(lambda: self._show_number_input_dialog(
                 tweak_id, title, current, row, min_val, max_val, step))
             card_layout.addWidget(row)
-            layout.addWidget(card)
+            (target or layout).addWidget(card)
 
         # Render sections straight from the registry. Titles (and descriptions)
         # are stored as QT_TRANSLATE_NOOP markers and translated here, at
@@ -199,22 +225,30 @@ class IOSSectionContent(QWidget):
             return QCoreApplication.translate("Nugget", spec.description)
 
         renderers = {
-            Kind.SWITCH: lambda spec: make_switch(spec.id, tr_title(spec), tr_description(spec)),
-            Kind.TEXT: lambda spec: make_text_input(spec.id, tr_title(spec), tr_description(spec)),
-            Kind.NUMBER: lambda spec: make_number_input(
+            Kind.SWITCH: lambda spec, target: make_switch(
+                spec.id, tr_title(spec), tr_description(spec), target),
+            Kind.TEXT: lambda spec, target: make_text_input(
+                spec.id, tr_title(spec), tr_description(spec), target),
+            Kind.NUMBER: lambda spec, target: make_number_input(
                 spec.id, tr_title(spec), spec.min_value, spec.max_value,
-                tr_description(spec), spec.step),
+                tr_description(spec), spec.step, target),
         }
 
         sections_to_render = self.sections if self.sections is not None else list(Section)
         hidden_sections = _hidden_sections()
+        collapsed_sections = _load_collapsed_sections()
         for section in sections_to_render:
             if section in hidden_sections:
                 continue
-            layout.addWidget(IOSSectionHeader(
-                QCoreApplication.translate("Nugget", section.value)))
+            collapsible = IOSCollapsibleSection(
+                QCoreApplication.translate("Nugget", section.value),
+                expanded=section.value not in collapsed_sections)
+            collapsible.toggled.connect(
+                lambda expanded, name=section.value: _save_collapsed_section(
+                    name, not expanded))
+            layout.addWidget(collapsible)
             for spec in SPECS_BY_SECTION[section]:
-                renderers[spec.kind](spec)
+                renderers[spec.kind](spec, collapsible.body_layout)
 
         layout.addStretch()
 

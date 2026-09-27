@@ -70,6 +70,22 @@ STYLES = {
         "text-transform: uppercase; letter-spacing: 0.5px; padding-left: 4px;"
     ),
 
+    # Header of an IOSCollapsibleSection: same look as a plain section header,
+    # but it is a button and carries a chevron in its text.
+    "collapsible_header": """
+        QPushButton#iosCollapsibleHeader {{
+            background: transparent;
+            border: none;
+            color: {text_secondary};
+            font-size: 13px;
+            font-weight: 600;
+            text-align: left;
+            padding: 10px 4px 10px 4px;
+        }}
+        QPushButton#iosCollapsibleHeader:hover {{ color: {text_primary}; }}
+        QPushButton#iosCollapsibleHeader:checked {{ color: {text_primary}; }}
+    """,
+
     "card": """
         IOSCard {{
             background-color: {bg_secondary};

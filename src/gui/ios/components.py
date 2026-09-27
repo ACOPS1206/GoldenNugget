@@ -227,6 +227,74 @@ class IOSCard(QFrame):
         self.setStyleSheet(t("card"))
 
 
+class IOSCollapsibleSection(QWidget):
+    """A section header that expands/collapses the content block below it.
+
+    Callers add their widgets to ``self.body_layout`` after construction (a
+    tweak section is rendered straight from the registry, so the body is
+    filled in right after this widget is created) and read back the resulting
+    state through ``expanded`` / the ``toggled`` signal.
+    """
+
+    EXPANDED_CHEVRON = "\u25be"    # small down triangle
+    COLLAPSED_CHEVRON = "\u25b8"   # small right triangle
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, title: str, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self.setObjectName("iosCollapsibleSection")
+        self._title = title
+        self._expanded = bool(expanded)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self.header = QPushButton(self)
+        self.header.setObjectName("iosCollapsibleHeader")
+        self.header.setCursor(Qt.PointingHandCursor)
+        self.header.setCheckable(True)
+        self.header.setFocusPolicy(Qt.NoFocus)
+        self.header.clicked.connect(self.toggle)
+        layout.addWidget(self.header)
+
+        self.body = QWidget(self)
+        self.body.setObjectName("iosCollapsibleBody")
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(8)
+        layout.addWidget(self.body)
+
+        # No toggled() emission here: the state was handed in by the caller.
+        self.set_expanded(self._expanded)
+        self._retheme()
+        _auto_retheme(self)
+
+    @property
+    def expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, expanded: bool):
+        """Show/hide the body. Only emits ``toggled`` on an actual change."""
+        expanded = bool(expanded)
+        changed = expanded != self._expanded
+        self._expanded = expanded
+        self.header.setChecked(expanded)
+        self.header.setText(
+            f"{self.EXPANDED_CHEVRON if expanded else self.COLLAPSED_CHEVRON}"
+            f"  {self._title}")
+        self.body.setVisible(expanded)
+        if changed:
+            self.toggled.emit(expanded)
+
+    def toggle(self):
+        self.set_expanded(not self._expanded)
+
+    def _retheme(self):
+        self.header.setStyleSheet(t("collapsible_header"))
+
+
 class IOSNavBar(QWidget):
     """Reusable navigation header."""
     def __init__(self, title: str = "", on_back=None, right_action=None,

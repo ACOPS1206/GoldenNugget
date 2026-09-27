@@ -122,6 +122,11 @@ plist location, key, default value, UI kind (switch/text/number).
   registry (daemons stay hand-defined there).
 - The iOS tweaks page (`src/gui/ios/tweaks.py`) renders its sections straight
   from `SPECS_BY_SECTION` — adding a tweak means adding one registry entry.
+- Sections are **collapsible**: each is an `IOSCollapsibleSection`
+  (`src/gui/ios/components.py`, header + `body_layout` the tweak cards are
+  added to) whose collapsed state is persisted per section name in
+  `tweaks_collapsed_sections` (comma-separated, `Settings("settings")`) so a
+  rebuild (device change) or a restart restores it.
 - Titles are marked with `QT_TRANSLATE_NOOP("Nugget", ...)` at
   definition time (so pyside6-lupdate sees them) and evaluated with
   `QCoreApplication.translate("Nugget", ...)` at render time in

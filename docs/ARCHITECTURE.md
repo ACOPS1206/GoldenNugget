@@ -148,7 +148,9 @@ Consumers:
   survives re-entry; `load_daemons()` builds the hand-defined daemon tweaks
   separately).
 - The iOS tweaks page renders sections straight from `SPECS_BY_SECTION`
-  (`SPECS_BY_ID` powers compatibility lookups).
+  (`SPECS_BY_ID` powers compatibility lookups). Every section is wrapped in an
+  `IOSCollapsibleSection` (`gui/ios/components.py`); the collapsed state is
+  stored per section name in `tweaks_collapsed_sections` and restored on rebuild.
 - `gui/ios/compat.py` evaluates `min_version` / `max_version` / device
   restrictions from the spec (public API unchanged).
 
