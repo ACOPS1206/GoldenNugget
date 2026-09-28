@@ -13,6 +13,7 @@ import threading
 # Qt-free shared type (kept here for backwards-compatible import paths forwards
 # to the same class the backend uses).
 from src.utils.alerts import ApplyAlertMessage
+from src.exceptions.nugget_exception import NuggetException
 
 
 class _SudoState:
@@ -201,7 +202,10 @@ class RestoreCacheThread(QThread):
             find_latest_protective_backup,
         )
         from src.restore.restore import _restore_protective_backup
-        from src.restore.afc_media import afc_media_dir_for, restore_media_via_afc
+        from src.restore.afc_media import (
+            afc_media_dir_for, describe_media_store, media_store_verified,
+            restore_media_via_afc,
+        )
         from src.devicemanagement.session import lockdown_session
 
         udid = self.manager.get_current_device_udid()
@@ -246,9 +250,10 @@ class RestoreCacheThread(QThread):
         # for those trees must be pruned the same way or the restore fails with
         # payload-missing rows. A cache master now carries photos the same way:
         # its Persistent per-device media store lives at
-        # ``<base>/media/<udid>``. Either way, only a media dir that actually
-        # has content is treated as the AFC source (an empty dir means the
-        # media has to ride the mobilebackup2 rows).
+        # ``<base>/media/<udid>``. Either way, only a media dir whose last pull
+        # finished cleanly is treated as the AFC source — "the folder has files
+        # in it" is not enough, because a partial pull would then let the prune
+        # below delete the backup's own copy of the photos.
         media_dir = afc_media_dir_for(source_root)
         from src.restore.protective_cache import peek_cache_info
         cache_info = peek_cache_info(udid)
@@ -260,7 +265,7 @@ class RestoreCacheThread(QThread):
                 base = None
             if base is not None:
                 media_dir = str(base / "media" / udid)
-        media_has_content = os.path.isdir(media_dir) and bool(os.listdir(media_dir))
+        media_has_content = media_store_verified(media_dir)
         removed_rows, removed_files = await asyncio.to_thread(
             clean_backup_for_restore, working_root, udid,
             include_keychain=bool(self._backup_password()),
@@ -292,10 +297,24 @@ class RestoreCacheThread(QThread):
             # dir, a cache master at ``<base>/media/<udid>``. Either way the
             # media dir rides the same AFC-located store and has to be pushed
             # back over AFC after the restore.
-            if os.path.isdir(media_dir) and os.listdir(media_dir):
-                self.update_label("Restoring photos/videos over AFC...")
-                await restore_media_via_afc(
+            if media_dir:
+                if not os.path.isdir(media_dir) or not os.listdir(media_dir):
+                    raise NuggetException(
+                        f"AFC media store is missing or empty ({media_dir}) — "
+                        f"the photos were not backed up before the wipe. "
+                        f"Aborting instead of pretending the restore finished.")
+                # the store is the ONLY copy of the photos once the wipe is
+                # done, so an incomplete push must abort the apply instead of
+                # letting it report success with missing media
+                self.update_label(
+                    f"Restoring photos/videos over AFC ({describe_media_store(media_dir)})...")
+                pushed = await restore_media_via_afc(
                     lc, media_dir, progress_callback=self._progress_cb)
+                if pushed.get("failed"):
+                    raise NuggetException(
+                        f"AFC media restore failed for {len(pushed['failed'])} "
+                        f"file(s) (e.g. {pushed['failed'][:3]}) — the photos on "
+                        f"the device are incomplete")
         self.update_label("Data restored successfully.")
 
     def _progress_cb(self, value):

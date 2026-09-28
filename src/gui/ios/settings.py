@@ -416,8 +416,9 @@ class IOSSettingsPage(QWidget):
             QMessageBox.warning(
                 self.window,
                 "Fast Backup Cache is on",
-                "Photos are always carried by the Fast Backup Cache path. "
-                "The AFC (parallel) media channel only runs on the standard "
+                "The Fast Backup Cache also uses the AFC (parallel) media "
+                "channel for photos, so this switch has no effect while the "
+                "cache is on. Turn the cache off to use it on the standard "
                 "backup path.",
             )
         pref.use_afc_media = checked

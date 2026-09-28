@@ -31,8 +31,10 @@ Design rules:
   the Media tree and would duplicate content.
 """
 
+import json
 import os
 import posixpath
+import time
 
 from pymobiledevice3.services.afc import MAXIMUM_READ_SIZE, AfcService
 
@@ -40,6 +42,14 @@ from src.exceptions.nugget_exception import NuggetException
 from src.utils.log_util import log_info, log_warn, log_error
 
 AFC_MEDIA_DIRNAME = "afc_media"
+
+# Marker written next to a media store once a pull has completed end to end.
+# The store is the ONLY copy of the user's photos between the wipe and Phase 5,
+# so "the folder is not empty" is NOT proof that it is intact: a cancelled or
+# interrupted pull leaves a partial tree behind that looks perfectly usable.
+# Everything that decides whether the media trees may be dropped from the backup
+# must consult this marker instead.
+MEDIA_STATE_FILE = ".media_state.json"
 
 # Top-level Media trees moved to the AFC channel. Everything else under
 # /var/mobile/Media (notably PhotoData/) stays in the mobilebackup2 backup:
@@ -74,6 +84,133 @@ def _is_afc_link(stat: dict) -> bool:
     return bool(stat) and stat.get("st_ifmt") == "S_IFLNK"
 
 
+# ---- media store verification -------------------------------------------
+#
+# A media store is only trustworthy when a pull ran to completion. That fact is
+# recorded in a marker file next to the tree; anything that would exclude the
+# media trees from the backup (and therefore delete the only copy of the user's
+# photos) has to require this marker.
+
+def media_store_state(media_root: str) -> dict | None:
+    """Parsed completion marker for ``media_root``, or ``None`` if there is none."""
+    if not media_root:
+        return None
+    try:
+        with open(os.path.join(media_root, MEDIA_STATE_FILE),
+                  encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _media_store_actual(media_root: str) -> tuple[int, int]:
+    """(files, bytes) actually present in the store.
+
+    A local directory walk only — no file is read — so it stays cheap even for a
+    60 GB store, while still catching a store that lost files after it was
+    marked (manual deletion, a cleanup tool, a failed disk).
+    """
+    files = 0
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(media_root):
+        for name in filenames:
+            if name == MEDIA_STATE_FILE or name.endswith(".part"):
+                continue
+            files += 1
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                pass
+    return files, total
+
+
+def media_store_verified(media_root: str) -> bool:
+    """True when the store still holds everything the last pull put in it.
+
+    Two conditions have to hold: the last pull finished without a single
+    failure (``complete`` in the marker), and the tree on disk is still at least
+    as large as that pull recorded. The second check means a store that was
+    emptied or trimmed *after* a good pull is rejected too. Extra local files
+    are fine — files deleted on the device are never removed locally, so the
+    store is allowed to be larger than the device.
+
+    This is the gate that decides whether the media trees may be left out of the
+    backup. An unverified store (first run, interrupted pull, cancelled parallel
+    task, missing marker) must keep the media rows in the manifest.
+    """
+    state = media_store_state(media_root)
+    if not state or not state.get("complete"):
+        return False
+    if not os.path.isdir(media_root):
+        return False
+    marked_files = int(state.get("files") or 0)
+    marked_bytes = int(state.get("bytes") or 0)
+    # a store that verified zero files is indistinguishable from one that was
+    # never populated, so it must not pass as a media carrier
+    if marked_files <= 0:
+        return False
+    actual_files, actual_bytes = _media_store_actual(media_root)
+    if actual_files < marked_files or actual_bytes < marked_bytes * 0.999:
+        log_warn(f"AFC media: {media_root} holds {actual_files} files / "
+                 f"{actual_bytes / (1024 * 1024):.1f} MB but the last verified "
+                 f"pull recorded {marked_files} files / "
+                 f"{marked_bytes / (1024 * 1024):.1f} MB — treating it as "
+                 f"UNVERIFIED so the backup keeps its own copy of the media")
+        return False
+    return True
+
+
+def describe_media_store(media_root: str) -> str:
+    """One-line summary of a media store, for logs and error messages."""
+    state = media_store_state(media_root) or {}
+    files = int(state.get("files") or 0)
+    mib = int(state.get("bytes") or 0) / (1024 * 1024)
+    return (f"{media_root}: {files} files / {mib:.1f} MB "
+            f"({'verified' if media_store_verified(media_root) else 'NOT verified'})")
+
+
+def _write_media_state(media_root: str, files: int, bytes_: int,
+                       skipped: int) -> None:
+    """Record a completed pull so later applies may treat the store as intact."""
+    state = {
+        "complete": True,
+        "files": int(files),
+        "bytes": int(bytes_),
+        "skipped": int(skipped),
+        "ts": time.time(),
+    }
+    tmp = os.path.join(media_root, MEDIA_STATE_FILE + ".tmp")
+    try:
+        os.makedirs(media_root, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, os.path.join(media_root, MEDIA_STATE_FILE))
+    except OSError as e:
+        log_warn(f"AFC media: could not write the media store marker "
+                 f"({e}) — the store stays unverified")
+
+
+def _invalidate_media_state(media_root: str, reason: str) -> None:
+    """Drop the completion marker after a failed/cancelled pull.
+
+    A partially written media tree must never be presented as a complete copy of
+    the user's photos, or the next apply would delete the backup's copy of the
+    media trees and push only the fragment that is left.
+    """
+    if not media_root:
+        return
+    had_state = media_store_state(media_root) is not None
+    try:
+        os.remove(os.path.join(media_root, MEDIA_STATE_FILE))
+    except OSError:
+        pass
+    if had_state:
+        log_warn(f"AFC media: media store marker dropped ({reason}) — "
+                 f"{media_root} is now UNVERIFIED and must not be used as the "
+                 f"only copy of the photos")
+
+
 def _progress_str(action: str, done_files: int, total_files: int,
                   done_bytes: int, total_bytes: int) -> str:
     if total_bytes > 0:
@@ -85,27 +222,69 @@ def _progress_str(action: str, done_files: int, total_files: int,
 
 
 async def _pull_one(afc, src: str, dst: str, stat) -> int:
-    """Stream one regular file from the device to ``dst``, returning bytes."""
+    """Stream one regular file from the device to ``dst``, returning bytes.
+
+    The write is verified against the size the device reported and lands through
+    a temp file, so a short read can never leave a truncated file behind that a
+    later size-based ``diff`` would accept as already pulled. That failure mode
+    is not cosmetic: a truncated MP4/MOV still *is* recognised by Photos but
+    will not play (its ``moov`` atom is at the tail), and this is the branch
+    every file over ``MAXIMUM_READ_SIZE`` — i.e. essentially every video —
+    takes, while the small-file branch below reads exactly ``st_size``.
+    """
     size = int(stat.get("st_size", 0))
     if size <= MAXIMUM_READ_SIZE:
         data = await afc.get_file_contents(src)
-        with open(dst, "wb") as f:
-            f.write(data)
+        # ``size`` is 0 when the device did not report one; only a real
+        # advertised size can be violated
+        if size and len(data) != size:
+            raise NuggetException(
+                f"AFC media: short read on {src} — device reported {size} bytes, "
+                f"got {len(data)}")
+        _atomic_write(dst, data)
         return len(data)
+
+    tmp = dst + ".part"
     handle = await afc.fopen(src)
     try:
         written = 0
-        with open(dst, "wb") as f:
+        with open(tmp, "wb") as f:
             while written < size:
                 to_read = min(MAXIMUM_READ_SIZE, size - written)
                 chunk = await afc.fread(handle, to_read)
                 if not chunk:
-                    break
+                    # premature EOF: the file is incomplete, not finished
+                    raise NuggetException(
+                        f"AFC media: connection ended mid-file on {src} — "
+                        f"got {written} of {size} bytes")
                 f.write(chunk)
                 written += len(chunk)
-        return written
+    except BaseException:
+        # never leave a partial file the diff would treat as complete
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     finally:
         await afc.fclose(handle)
+    os.replace(tmp, dst)
+    return written
+
+
+def _atomic_write(dst: str, data: bytes) -> None:
+    """Write ``data`` to ``dst`` through a temp file + rename."""
+    tmp = dst + ".part"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 async def _list_afc_tree(afc, dirpath: str, entries: list,
@@ -177,7 +356,29 @@ async def backup_media_via_afc(lockdown_client, media_root: str,
     if os.path.isdir(root) and os.listdir(root):
         log_info(f"AFC media pull: {root} already populated — "
                  f"{'diff refresh (pull only new/changed)' if diff else 'full refresh'}")
-    async with AfcService(lockdown_client) as afc:
+    # Drop the old claim BEFORE touching anything: this pull is about to rewrite
+    # files in the store, so the previous run's "verified" is already stale. It
+    # also covers the case the except-branch cannot — a hard process kill in the
+    # middle of the pull — which would otherwise leave the marker claiming a
+    # complete copy of a half-rewritten store.
+    _invalidate_media_state(root, "a new pull is starting")
+    try:
+        return await _backup_media_tree(afc_lockdown_client=lockdown_client, root=root,
+                                        diff=diff, on_error=on_error,
+                                        progress_callback=_log)
+    except BaseException as e:
+        # Covers per-file failures AND cancellation (the parallel task is
+        # cancelled when the mobilebackup2 backup fails). Either way the store is
+        # now a fragment: make sure no later apply can mistake it for a
+        # complete copy of the user's photos.
+        _invalidate_media_state(root, f"pull did not finish ({type(e).__name__})")
+        raise
+
+
+async def _backup_media_tree(afc_lockdown_client, root: str, diff: bool,
+                             on_error: str, progress_callback) -> dict:
+    tally = {"files": 0, "bytes": 0, "skipped": 0}
+    async with AfcService(afc_lockdown_client) as afc:
         entries: list = []
         root_children = await afc.listdir("/")
         for name in sorted(root_children):
@@ -208,6 +409,7 @@ async def backup_media_via_afc(lockdown_client, media_root: str,
                 except OSError:
                     pass  # file missing locally -> pull it
             os.makedirs(os.path.dirname(dst), exist_ok=True)
+            n = 0
             try:
                 n = await _pull_one(afc, src, dst, st)
             except Exception as e:
@@ -220,8 +422,9 @@ async def backup_media_via_afc(lockdown_client, media_root: str,
             done_files += 1
             done_bytes += n
             if done_files % 25 == 0 or done_files == total_files:
-                _log(_progress_str("Backing up photos/videos over AFC",
-                                   done_files, total_files, done_bytes, total_bytes))
+                progress_callback(_progress_str(
+                    "Backing up photos/videos over AFC", done_files,
+                    total_files, done_bytes, total_bytes))
 
         log_info(f"AFC media pull complete: {total_files} files, "
                  f"{total_bytes / (1024 * 1024):.1f} MB"
@@ -230,9 +433,13 @@ async def backup_media_via_afc(lockdown_client, media_root: str,
         tally["bytes"] = total_bytes
         tally["skipped"] = skipped
         if failed:
+            # a store with holes in it is not a copy of the photos: leave it
+            # unmarked so the apply refuses to treat it as the media carrier
             log_warn(f"AFC media pull: {len(failed)} files skipped on error "
-                     f"(e.g. {failed[:3]})")
+                     f"(e.g. {failed[:3]}) — media store left UNVERIFIED")
             tally["failed"] = failed
+        else:
+            _write_media_state(root, total_files, total_bytes, skipped)
     return tally
 
 
@@ -251,6 +458,14 @@ async def _push_one(afc, src: str, remote_rel: str) -> int:
                 if not chunk:
                     break
                 await afc.fwrite(handle, chunk)
+        # a streaming write is the one that can end up half-written on the
+        # device, so confirm what actually landed before reporting success
+        st = await afc.stat(remote_rel)
+        got = st.get("st_size") if st else None
+        if got != size:
+            raise NuggetException(
+                f"AFC media: {remote_rel} was written short on the device "
+                f"({got} of {size} bytes)")
         return size
     finally:
         await afc.fclose(handle)
@@ -278,6 +493,10 @@ async def restore_media_via_afc(lockdown_client, media_root: str,
     total_bytes = 0
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in sorted(filenames):
+            # never push our own bookkeeping: the marker and any leftover
+            # .part are host-side files, not photos
+            if name == MEDIA_STATE_FILE or name.endswith(".part"):
+                continue
             src = os.path.join(dirpath, name)
             rel = os.path.relpath(src, root).replace(os.sep, "/")
             entries.append((src, rel))
@@ -287,12 +506,19 @@ async def restore_media_via_afc(lockdown_client, media_root: str,
         done_files = 0
         done_bytes = 0
         failed: list[str] = []
+        made_dirs: set = set()
         for src, rel in entries:
             remote = f"/{rel}"
             rdir = posixpath.dirname(remote)
+            n = 0
             try:
-                if rdir and rdir != "/":
-                    await afc.makedirs(rdir)
+                # only MAKE_DIR once per directory: a redundant MAKE_DIR can come
+                # back non-SUCCESS on an existing directory and would abort the
+                # restore on the second file of every folder
+                if rdir and rdir != "/" and rdir not in made_dirs:
+                    made_dirs.add(rdir)
+                    if not await afc.exists(rdir):
+                        await afc.makedirs(rdir)
                 n = await _push_one(afc, src, remote)
             except Exception as e:
                 msg = f"AFC media: failed to restore {remote}: {e}"

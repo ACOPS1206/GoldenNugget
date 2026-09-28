@@ -229,7 +229,7 @@ result). Do not call `create_using_usbmux` directly in new code.
 ### `_apply_changes()`
 Main entry point for applying tweaks. Order:
 1. `_raise_if_unsupported()` — hard-block iOS < 26.2
-2. `_prepare_protective_backup()` — Phase 0, **iOS 27+ only** (no Phase 0 on iOS 26): builds the protective backup that Phase 3 will restore. Default (cache OFF): a **live** `perform_protective_backup()` fresh every apply, **always carrying the PosterBoard container when wallpapers are pending** (`include_posterboard`) so the extracted DB is never stale. With the experimental cache ON: incremental refresh of the cached master; the "reuse as-is" fast path never applies when wallpapers are pending, so the extracted DB is still always fresh. Returns (PreparedBackup, posterboard_db_ok); (None, False) only when there is no UDID
+2. `_prepare_protective_backup()` — Phase 0, **iOS 27+ only** (no Phase 0 on iOS 26): builds the protective backup that Phase 3 will restore. Default (cache OFF): a **live** `perform_protective_backup()` fresh every apply, **always carrying the PosterBoard container when wallpapers are pending** (`include_posterboard`) so the extracted DB is never stale. With the experimental cache ON: incremental refresh of the cached master; the "reuse as-is" fast path never applies when wallpapers are pending, so the extracted DB is still always fresh. Returns (PreparedBackup, posterboard_db_ok); (None, False) only when there is no UDID. It is a thin wrapper that ends in `_require_media_copy()` — when the AFC media channel carried the photos, the apply refuses to continue (device still intact) unless the media store is **verified** complete; see the AFC media store section below
 3. PosterBoard DB delivery:
    - **iOS 26.x (no Phase 0):** a **targeted PosterBoard-only backup**
      (`targeted_posterboard_database_backup` in `src/restore/posterboard_backup.py`)
@@ -277,6 +277,40 @@ backup in the persistent app-data store
   This is the same channel the LIVE path uses, so the media type is identical;
   `GOLDENNUGGET_NO_AFC_MEDIA=1` makes the cache carry photos on the
   mobilebackup2 rows instead.
+- **AFC media completeness marker** (data-loss guard — a media store is NOT
+  proven by having files in it). Because the store is the only copy of the
+  photos between the wipe and Phase 5, "is the directory non-empty" was
+  catastrophic: a cancelled/interrupted pull leaves a partial tree, and the
+  prune then deleted the backup's own media rows. `backup_media_via_afc` now
+  writes `.media_state.json` (`MEDIA_STATE_FILE`) into the store **only** after a
+  pull that finished with zero failed files, recording the device-side
+  `files`/`bytes`; it is removed before a pull starts and on ANY failure or
+  cancellation (`except BaseException`, so a cancelled parallel task counts).
+  Everything that could drop the media trees from the backup must gate on
+  `media_store_verified(root)` (`src/restore/afc_media.py`) — marker present +
+  `complete` + the tree still holds at least what the pull recorded (extra local
+  files are fine, they are never deleted). Never reintroduce a
+  `isdir() and any(iterdir())` / `os.listdir()` completeness test:
+  - `DeviceManager._prepare_protective_backup` is a thin wrapper around
+    `_build_protective_backup` and ends in `_require_media_copy(prepared)`,
+    which raises `NuggetException` when a backup that excludes the media trees
+    has no verified store — the apply stops while the device is still intact.
+    The wrapper exists so none of the many return paths can bypass the gate.
+  - the cache fast path's `media_ready` uses the marker too, so a partial store
+    forces a refresh instead of being reused as-is.
+  - `clean_backup_for_restore(exclude_afc_media_trees=media_store_verified(...))`
+    keeps the media rows in the manifest when the store is unverified, so the
+    restore fails loudly on a missing payload instead of losing the library.
+  - Phase 5 and `apply_worker` push whatever store exists (that is the rescue
+    path and `restore_cache.py` relies on it), but raise instead of reporting
+    success when the store is missing/empty or any file failed to land.
+  - `_pull_one` writes through `<file>.part` + `os.replace()` and validates the
+    result against `st_size`: a premature EOF used to leave a truncated file
+    that the size-based diff then accepted, which is how videos ended up
+    unplayable (a truncated MP4/MOV still shows in Photos but its `moov` atom is
+    at the tail). `_push_one` `stat`s streamed writes to catch a short write on
+    the device. `.media_state.json` and `*.part` are never pushed to the device.
+  - Offline regression suite: `tools/test_afc_media_safety.py`.
 - The pre-apply summary in `main_window_mixins._confirm_apply_summary` shows a
   "Backup cache from: <date>" line (via `peek_cache_info`, best-effort, no
   device session) and — when the cache is enabled — an **"Update Cache"**
@@ -456,7 +490,11 @@ backup in the persistent app-data store
   travels only on that channel — it was excluded from the backup), then
   `skip_all_setup27()` — runs whenever skip-setup is requested, on every
   apply including the Phase 2-skipped ones (PosterBoard-only / unchanged
-  tweaks + added wallpapers). When the device was never wiped it
+  tweaks + added wallpapers). The media push is the rescue path, so it runs on
+  whatever store exists, but it **raises** instead of reporting success when
+  the store is missing/empty or any file failed to land (the pre-apply
+  `_require_media_copy` gate is what should have prevented the wipe). When the
+  device was never wiped it
   typically already carries a cloud configuration and
   `SetCloudConfiguration` raises `CloudConfigurationAlreadyPresentError`,
   which is caught and treated as success (setup already handled) instead of

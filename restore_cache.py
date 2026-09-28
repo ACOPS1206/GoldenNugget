@@ -69,6 +69,7 @@ from src.restore.storage import (  # noqa: E402
 )
 from src.restore.afc_media import (  # noqa: E402
     afc_media_dir_for,
+    describe_media_store,
     restore_media_via_afc,
 )
 from src.restore.restore import (  # noqa: E402
@@ -315,9 +316,16 @@ async def run(args) -> int:
     print(f"Source: {label}")
     print(f"Backup root: {source_root}")
     if media_dir and os.path.isdir(media_dir) and os.listdir(media_dir):
-        print(f"AFC media store: {media_dir}")
-    else:
+        # deliberately NOT gated on media_store_verified(): pushing a partial
+        # store is exactly what this tool is for when a device already lost its
+        # photos, so the marker is reported but not enforced here
+        print(f"AFC media store: {describe_media_store(media_dir)}")
+    elif media_dir:
         media_dir = ""  # no media store on disk -> media rides mobilebackup2 rows
+        print("WARNING: the AFC media store this backup expects is missing or "
+              "empty, so the photos/videos have to come from the "
+              "mobilebackup2 rows in this backup — if they are not there, they "
+              "are gone. Check the media directory before relying on this.")
 
     # build a restorable (pruned) working copy from the master
     try:

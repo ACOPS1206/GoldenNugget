@@ -50,7 +50,10 @@ from src.tweaks.icon_themes.icon_themes_tweak import IconThemesTweak
 from src.tweaks.basic_plist_locations import FileLocation
 
 from src.restore.restore import restore_files, FileToRestore
-from src.restore.afc_media import afc_media_dir_for, afc_media_enabled
+from src.restore.afc_media import (
+    afc_media_dir_for, afc_media_enabled, describe_media_store,
+    media_store_verified,
+)
 from src.restore.original_plist import psysbackup, materialize_plist, is_empty_plist, mobile_user_fallback_path
 from src.restore.protective import log_error, log_info, log_warn
 
@@ -604,6 +607,44 @@ class DeviceManager:
                                          needs_posterboard: bool = False,
                                          prompt_password=None) -> tuple:
         """Phase 0: build the protective backup that Phase 3 will restore.
+
+        Wraps ``_build_protective_backup`` and refuses to hand back a backup that
+        has no verified copy of the photos. See that method for the two modes;
+        this wrapper exists so the media gate cannot be bypassed by one of the
+        several return paths inside it.
+        """
+        prepared, pb_ok = await self._build_protective_backup(
+            update_label, needs_posterboard, prompt_password)
+        self._require_media_copy(prepared)
+        return prepared, pb_ok
+
+    @staticmethod
+    def _require_media_copy(prepared) -> None:
+        """Abort before the wipe if the photos are not safely on this computer.
+
+        When the AFC media channel carries the bulk photo trees, those trees are
+        NOT in the backup — the media store is their only copy once the device
+        is wiped. An unverified store (never pulled, interrupted pull, cancelled
+        parallel task) must stop the apply here, while the device is still
+        intact, instead of letting Phase 5 push a fragment and report success.
+        """
+        media_src = getattr(prepared, "media_src", "") if prepared else ""
+        if not media_src:
+            return
+        if media_store_verified(media_src):
+            return
+        raise NuggetException(
+            f"The photos/videos could not be fully backed up "
+            f"({describe_media_store(media_src)}). Applying tweaks would wipe "
+            f"the device with no complete copy of the media, so it was stopped "
+            f"before anything was changed. Free up disk space / reconnect the "
+            f"device and try again; the backup cache can also be refreshed from "
+            f"the pre-apply summary.")
+
+    async def _build_protective_backup(self, update_label=lambda x: None,
+                                        needs_posterboard: bool = False,
+                                        prompt_password=None) -> tuple:
+        """Build the protective backup (LIVE or cached master) — see above.
     
         Two modes:
 
@@ -745,8 +786,13 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
             cache = ProtectiveBackupCache(udid, product_version=self.get_current_device_version(),
                                           encrypted=encrypted)
             found = cache.locate()
+            # "the folder is not empty" is not proof of a usable media copy: a
+            # cancelled or interrupted pull leaves a partial tree that still has
+            # files in it. Only a store whose last pull ran to completion counts
+            # as in sync, so a partial one always forces a refresh (which redoes
+            # the pull) instead of being carried into the wipe.
             media_ready = (not use_afc_media
-                           or (cache.media_dir.is_dir() and any(cache.media_dir.iterdir())))
+                           or media_store_verified(str(cache.media_dir)))
             # fast path: a fresh cache (no wallpapers pending, media already in
             # sync) is reused as-is — no device session at all; past the TTL it
             # gets an incremental refresh. The AFC media store has to exist too,

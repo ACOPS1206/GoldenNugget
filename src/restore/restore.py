@@ -13,7 +13,10 @@ from . import backup, perform_restore, reboot_device
 from src.utils.file_to_restore import FileToRestore, _FileMode
 from .lastapply import is_ios27_scaffolding, load_lastapply, sparse_signature
 from .skip_setup27 import skip_all_setup27
-from .afc_media import afc_media_dir_for, afc_media_enabled, restore_media_via_afc
+from .afc_media import (
+    afc_media_dir_for, afc_media_enabled, describe_media_store,
+    media_store_verified, restore_media_via_afc,
+)
 from .inject import _is_encrypted_backup
 from .protective import (
     PreparedBackup,
@@ -581,11 +584,14 @@ async def _restore_ios27(back: backup.Backup, reboot: bool,
                 include_keychain=include_keychain,
                 manifest_password=manifest_password,
                 # AFC trees are pruned from the manifest only when the media
-                # dir actually carries them (a cache master's media store, or a
-                # fresh live AFC pull). An empty/missing dir means the media
-                # rides the mobilebackup2 rows and they must stay.
-                exclude_afc_media_trees=(bool(media_dir) and os.path.isdir(media_dir)
-                                         and bool(os.listdir(media_dir)))
+                # store is a *verified* copy of them. "The directory is not
+                # empty" is not proof: an interrupted pull leaves a partial tree
+                # behind, and pruning on that would delete the backup's only
+                # copy of the photos and restore a fragment. When the store is
+                # unverified the media rows stay in the manifest, so the restore
+                # fails loudly on a missing payload instead of silently losing
+                # the library's files.
+                exclude_afc_media_trees=media_store_verified(media_dir)
             )
         log_info(f"Phase 1: Pruned backup: -{removed_rows} manifest rows, -{removed_files} payload files "
                  f"({time.monotonic() - started:.1f}s into the run)")
@@ -834,15 +840,27 @@ async def _restore_ios27(back: backup.Backup, reboot: bool,
             # live session when no reboot happened). This is the ONLY channel
             # that carries them on an AFC apply — the protective restore ships
             # only the non-media scope (media rows were not in its backup).
-            if media_dir and os.path.isdir(media_dir) and os.listdir(media_dir):
-                log_info(f"Phase 5: Pushing photos/videos back over AFC ({media_dir})")
-                await restore_media_via_afc(
+            if media_dir:
+                # The media store is the ONLY copy of the photos at this point
+                # (the device was just wiped), so anything short of a complete
+                # push is a data-loss event and must abort loudly rather than
+                # let the apply report success.
+                if not os.path.isdir(media_dir) or not os.listdir(media_dir):
+                    raise NuggetException(
+                        f"AFC media store is missing or empty ({media_dir}) — "
+                        f"the photos were not backed up before the wipe. "
+                        f"Aborting instead of pretending the restore finished.")
+                log_info(f"Phase 5: Pushing photos/videos back over AFC "
+                         f"({describe_media_store(media_dir)})")
+                pushed = await restore_media_via_afc(
                     lc, media_dir,
                     progress_callback=progress_callback)
+                if pushed.get("failed"):
+                    raise NuggetException(
+                        f"AFC media restore failed for {len(pushed['failed'])} "
+                        f"file(s) (e.g. {pushed['failed'][:3]}) — the photos on "
+                        f"the device are incomplete")
                 log_info("Phase 5: Media restored over AFC")
-            elif media_dir:
-                log_warn(f"Phase 5: AFC media dir {media_dir} is empty/missing — "
-                         "nothing to restore (photos may be lost to the wipe)")
 
             if skip_setup:
                 progress_callback("Skipping setup panes...")
