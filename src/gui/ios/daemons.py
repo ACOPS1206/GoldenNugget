@@ -1,5 +1,10 @@
-from PySide6.QtCore import QCoreApplication
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QHBoxLayout, QLabel, QMessageBox
+from PySide6.QtCore import (
+    QCoreApplication, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup,
+)
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QScrollArea, QHBoxLayout, QLabel, QMessageBox,
+    QGraphicsOpacityEffect, QSizePolicy,
+)
 
 from src.gui.ios.components import IOSSectionHeader, IOSSwitch
 from src.gui.theme import ColorThemeManager
@@ -7,6 +12,131 @@ from src.tweaks.tweaks import tweaks, TweakID
 from src.tweaks.tweak_loader import load_daemons
 from src.tweaks.daemons_tweak import Daemon, RECOMMENDED_ANALYTICS
 from src.controllers.hotload import HotLoad, confirm_flagged
+
+# QWIDGETSIZE_MAX — PySide6 does not export the C macro, this is its value.
+_NO_MAX_HEIGHT = 16777215
+
+
+class _DaemonRows(QWidget):
+    """The daemon rows, revealed as one block by the master switch.
+
+    The rows live in their own widget so the whole block can be folded away from
+    the page when daemon modifications are off. Geometry belongs to the layout,
+    so the reveal animates ``maximumHeight``: 0 means folded away (the layout
+    spacing collapses with it, so nothing is left behind) and the block growing
+    back to its natural height reveals the rows one after another, top down —
+    that is the cascade. A single ``QGraphicsOpacityEffect`` on the block fades
+    it in over the top.
+
+    Deliberately one effect for the whole block and not one per row: a per-row
+    effect makes Qt render every row into its own pixmap on every frame
+    (thousands of paint warnings on a 35-row list, and needless work on the
+    device). The effect is dropped again when the run finishes, so a visible
+    list renders exactly as it did before the animation existed.
+    """
+
+    FADE_IN_MS = 220
+    UNFOLD_IN_MS = 340
+    FADE_OUT_MS = 140
+    UNFOLD_OUT_MS = 220
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred,
+                           QSizePolicy.Policy.Fixed)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._rows: list = []
+        self._group: QParallelAnimationGroup | None = None
+        self._shown = True
+
+    def append(self, widget: QWidget) -> QWidget:
+        """Add a row (or a section header) to the animated block."""
+        self._rows.append(widget)
+        self._layout.addWidget(widget)
+        return widget
+
+    def snap(self, shown: bool) -> None:
+        """Show/hide with no animation at all (page build, device change)."""
+        self._stop()
+        self._shown = shown
+        self._detach_effects()
+        self.setVisible(shown)
+        self.setMaximumHeight(_NO_MAX_HEIGHT if shown else 0)
+
+    def set_shown(self, shown: bool, animate: bool = True) -> None:
+        """Show/hide the block, unrolling in (or folding away) when asked."""
+        if shown == self._shown:
+            if not animate:
+                self.snap(shown)
+            return
+        self._shown = shown
+        if animate:
+            self._animate(shown)
+        else:
+            self.snap(shown)
+
+    def _stop(self) -> None:
+        if self._group is not None:
+            self._group.stop()
+            self._group.deleteLater()
+            self._group = None
+
+    def _detach_effects(self) -> None:
+        if self.graphicsEffect() is not None:
+            # setGraphicsEffect(None) deletes the old effect itself, so it must
+            # not be deleteLater()d again (that raises in PySide6)
+            self.setGraphicsEffect(None)
+
+    def _animate(self, shown: bool) -> None:
+        self._stop()
+        self._detach_effects()
+        group = QParallelAnimationGroup(self)
+
+        # sizeHint comes from the layout and ignores visibility, but reveal the
+        # block before asking, so the fold has something to grow into
+        full = self.sizeHint().height()
+        height = QPropertyAnimation(self, b"maximumHeight", self)
+        if shown:
+            self.setVisible(True)
+            self.setMaximumHeight(0)
+            height.setStartValue(0)
+            height.setEndValue(full)
+            height.setDuration(self.UNFOLD_IN_MS)
+            height.setEasingCurve(QEasingCurve.Type.OutCubic)
+        else:
+            height.setStartValue(self.height() or full)
+            height.setEndValue(0)
+            height.setDuration(self.UNFOLD_OUT_MS)
+            height.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.addAnimation(height)
+
+        effect = QGraphicsOpacityEffect(self)
+        effect.setOpacity(0.0 if shown else 1.0)
+        self.setGraphicsEffect(effect)
+        fade = QPropertyAnimation(effect, b"opacity", self)
+        fade.setStartValue(0.0 if shown else 1.0)
+        fade.setEndValue(1.0 if shown else 0.0)
+        fade.setDuration(self.FADE_IN_MS if shown else self.FADE_OUT_MS)
+        fade.setEasingCurve(
+            QEasingCurve.Type.OutCubic if shown else QEasingCurve.Type.InCubic)
+        group.addAnimation(fade)
+
+        group.finished.connect(lambda: self._on_finished(shown))
+        self._group = group
+        group.start()
+
+    def _on_finished(self, shown: bool) -> None:
+        if shown:
+            # never leave the fold at the height it had when the animation was
+            # built: a resize or a font change could clip the rows afterwards
+            self.setMaximumHeight(_NO_MAX_HEIGHT)
+        else:
+            self.setVisible(False)
+            self.setMaximumHeight(0)
+        self._stop()
+        self._detach_effects()
 
 
 class IOSDaemonsContent(QWidget):
@@ -44,6 +174,17 @@ class IOSDaemonsContent(QWidget):
         master_row.addWidget(self.master_switch)
         layout.addWidget(master_card)
 
+        # Everything that acts on daemons lives in one block that the master
+        # switch unrolls / folds away, so those rows only exist on screen while
+        # daemon modifications are actually on. The Recommended shortcut is the
+        # first row of that block: leaving it on screen next to a hidden list
+        # would just look broken. The forced-by-HotLoad rows are in here too;
+        # hiding them changes nothing safety-wise, because
+        # _apply_hotload_daemon_forcing injects those keys at apply time no
+        # matter what the switches (or a preset) say.
+        self._rows = _DaemonRows(self)
+        layout.addWidget(self._rows)
+
         # Recommended: one tap to disable every safe analytics/telemetry daemon.
         # Pure analytics/tracking/logging — nothing boot-critical, so this set
         # is confirmed safe to disable (mirrors MiniVoidyy/GoldenNugget-).
@@ -59,7 +200,7 @@ class IOSDaemonsContent(QWidget):
         self.recommended_switch = IOSSwitch(self._recommended_all_on())
         self.recommended_switch.toggled.connect(self._on_recommended_toggled)
         recommended_row.addWidget(self.recommended_switch)
-        layout.addWidget(self.recommended_card)
+        self._rows.append(self.recommended_card)
 
         self.daemon_cards = []
         self.daemon_switches = []
@@ -68,11 +209,11 @@ class IOSDaemonsContent(QWidget):
         self._confirming = False
         self._hotload_acked = False
 
+        self._forced_daemons: dict = {}
+        self._forced_switches = []
         # HotLoad: daemons force-disabled on this device/iOS ({"Name": reason}).
         settings = getattr(self.window, "settings", None) if self.window is not None else None
         dm = getattr(self.window, "device_manager", None) if self.window is not None else None
-        self._forced_daemons: dict = {}
-        self._forced_switches = []
         if dm is not None:
             self._forced_daemons = HotLoad(settings).disabled_daemons(
                 device_version=dm.get_current_device_version(),
@@ -98,13 +239,13 @@ class IOSDaemonsContent(QWidget):
             (QCoreApplication.translate("Nugget", "Follow Up"), Daemon.FollowUp),
             (QCoreApplication.translate("Nugget", "Location Services"), Daemon.Location),
         ]:
-            card, switch = self._make_daemon_switch(layout, title, daemon)
+            card, switch = self._make_daemon_switch(title, daemon)
             self.daemon_cards.append(card)
             self.daemon_switches.append((daemon, switch))
 
         # Analytics, data tracking & logging toggles (from MiniVoidyy/GoldenNugget-)
         # Safe telemetry/analytics daemons — nothing boot-critical.
-        layout.addWidget(IOSSectionHeader(
+        self._rows.append(IOSSectionHeader(
             QCoreApplication.translate("Nugget", "Analytics, Data Tracking & Logging")
         ))
         for title, daemon in [
@@ -124,7 +265,7 @@ class IOSDaemonsContent(QWidget):
             (QCoreApplication.translate("Nugget", "Disable Triald (A/B Experiment Telemetry)"), Daemon.Triald),
             (QCoreApplication.translate("Nugget", "Disable Sociald"), Daemon.Sociald),
         ]:
-            card, switch = self._make_daemon_switch(layout, title, daemon)
+            card, switch = self._make_daemon_switch(title, daemon)
             self.daemon_cards.append(card)
             self.daemon_switches.append((daemon, switch))
 
@@ -149,7 +290,7 @@ class IOSDaemonsContent(QWidget):
         self._update_daemons_enabled()
         layout.addStretch()
 
-    def _make_daemon_switch(self, layout, title: str, daemon: Daemon):
+    def _make_daemon_switch(self, title: str, daemon: Daemon):
         card = QWidget()
         row_layout = QHBoxLayout(card)
         row_layout.setContentsMargins(16, 10, 16, 10)
@@ -179,7 +320,7 @@ class IOSDaemonsContent(QWidget):
             self._forced_notes.append(note)
             row_layout.addWidget(note)
 
-        layout.addWidget(card)
+        self._rows.append(card)
         return card, switch
 
     def _on_master_toggled(self, checked: bool):
@@ -190,7 +331,7 @@ class IOSDaemonsContent(QWidget):
             self.master_switch.blockSignals(False)
             return
         self.daemons_tweak.set_enabled(checked)
-        self._update_daemons_enabled()
+        self._update_daemons_enabled(animate=True)
 
     def _recommended_all_on(self) -> bool:
         """True when every daemon in RECOMMENDED_ANALYTICS is already active."""
@@ -319,7 +460,7 @@ class IOSDaemonsContent(QWidget):
                 "(PosterBoard) on iPhone 14. If your wallpaper disappears after "
                 "applying, re-enable this daemon and apply again."))
 
-    def _update_daemons_enabled(self):
+    def _update_daemons_enabled(self, animate: bool = False):
         enabled = self.daemons_tweak.enabled
         for card in self.daemon_cards:
             card.setEnabled(enabled)
@@ -328,6 +469,9 @@ class IOSDaemonsContent(QWidget):
         for switch in self._forced_switches:
             switch.setChecked(True)
             switch.setEnabled(False)
+        # the only caller that animates is the master switch itself; a build, a
+        # device change or a theme change must never re-run the cascade
+        self._rows.set_shown(enabled, animate=animate)
 
     def refresh_from_tweaks(self):
         """Resync every switch with the current tweak state."""
