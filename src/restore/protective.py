@@ -92,7 +92,7 @@ class PreparedBackup:
 # Backups can easily reach several GB (photos, app data), so filling the disk
 # mid-backup is a real hazard. Overridable via GOLDENNUGGET_MIN_FREE_GB.
 #
-# Note the destinations differ: ``psysbackup`` and the PosterBoard backup still
+# Note the destinations differ: the PosterBoard backup still
 # write to the system temp directory, while live protective backups go to the
 # persistent app-data folder (see ``protective_persistent_base``). Callers that
 # pass a path must pass the one they actually write to — on a multi-volume Mac

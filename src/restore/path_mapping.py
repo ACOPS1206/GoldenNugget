@@ -1,9 +1,9 @@
 """Single source of truth for absolute-device-path -> backup-domain mapping.
 
 Previously this table lived in two places — `DeviceManager.get_domain_for_path`
-(device_manager.py) and `_BACKUP_DOMAIN_MAPPINGS` (original_plist.py) — with
-the risk that one drifted and a reset wrote plists into the wrong domain.
-Both call sites now use this module.
+(device_manager.py) and a second copy next to it — with the risk that one
+drifted and a reset wrote plists into the wrong domain. Both call sites now
+use this module.
 """
 from typing import Optional, Tuple
 

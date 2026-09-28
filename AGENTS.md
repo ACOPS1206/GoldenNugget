@@ -408,7 +408,21 @@ backup in the persistent app-data store
 - Passes `backup_password` for encrypted backups and `prepared_backup_root` down to the three-phase restore
 
 ### `_reset_tweaks()`
-- Reset flow: `_raise_if_unsupported()` → `_capture_original_plists()` (via `psysbackup()`) → build reset files → `start_restore()`
+- Reset flow: `_raise_if_unsupported()` → build reset files → `start_restore()`
+- **No original-plist capture.** The device's own plists are NOT pulled before
+  the reset; stock values are written straight to the device on every iOS
+  version. The old iOS-27-only capture (`psysbackup`, module
+  `src/restore/original_plist.py`) is gone — it cost a full selective backup
+  plus a lockdown session and did not buy anything: the managed-preferences
+  copy the tweaks write to already holds the *tweaked* values, so restoring a
+  captured "original" re-wrote the very tweaks the user asked to remove. A
+  reset therefore discards any non-Nugget customisation in those plists.
+- What each `files_to_null` entry is written as:
+  - **iOS 27+** → `plistlib.dumps({})` (a valid but empty plist).
+  - **iOS 26** → `b""` (zero-byte, the original Nugget behaviour).
+  - **Never** write a zero-byte plist on iOS 26.2+: a truncated
+    `com.apple.springboard.plist` crashes SpringBoard at boot and sends the
+    device into a boot loop. An empty dict parses and falls back to defaults.
 
 ## Restore Module (src/restore/)
 
@@ -506,7 +520,7 @@ backup in the persistent app-data store
 ### `perform_protective_backup()` (src/restore/protective.py)
 - Creates a selective device backup via mobilebackup2. The module keeps the
   whole live-backup pipeline (`perform_protective_backup`,
-  `make_protective_working_copy`, `prune_protective_backups`, `psysbackup`,
+  `make_protective_working_copy`, `prune_protective_backups`,
   `clean_backup_for_restore`); the injection helpers live in
   `src/restore/inject.py` and the cache in `src/restore/protective_cache.py`
   (both re-exported from `protective.py`).
@@ -533,24 +547,6 @@ backup in the persistent app-data store
   mobilebackup2 startup delay)
 - Accepts `backup_password` for encrypted backups
 
-## Original Plist Capture (src/restore/original_plist.py)
-
-### `psysbackup()`
-- **Selective** backup of the plists listed by `FileLocation`: uses the same
-  `ProtectiveBackupService` (app containers skipped via empty `Applications`)
-  plus a mid-stream `filter_callback` keep-set, so no full-device copy is ever
-  pulled. The keep-set covers iOS 26 domain-qualified names
-  (`ManagedPreferencesDomain/...`) and iOS 27 raw-tree names (`/.b/<n>/...`).
-- Templates device-specific values (SerialNumber, DeviceName, etc.)
-- Skipped (returns `{}`) if backup encryption is enabled **and no
-  `backup_password` is provided**; with a password it decrypts the manifest
-  and proceeds
-- Retry logic: 3 attempts, backoff `min(2**attempt, 15)`s (2s, 4s) for connection errors
-- Validates Manifest.db is valid SQLite before reading
-- `_reset_tweaks` treats the whole capture as **best-effort**: on a capture
-  failure (e.g. PlistParseError on an already half-broken device) it falls
-  back to stock `{}` defaults instead of aborting the reset
-
 ## PosterBoard Backup (src/gui/dialogs/pb_dialog.py)
 
 ### `targeted_posterboard_database_backup` (wizard channel)
@@ -574,8 +570,8 @@ backup in the persistent app-data store
   or "MBErrorDomain" in the message (defined **once** in
   `src/exceptions/device_errors.py`; imported/aliased locally as
   `_is_device_locked_error` in `device_manager.py`, `protective.py`,
-  `original_plist.py`, `pb_dialog.py`)
-- Used in: `psysbackup()`, `backup_posterboard_database()`, `perform_protective_backup()`, `_backup_posterboard_database()`, `_capture_original_plists()`
+  `pb_dialog.py`)
+- Used in: `backup_posterboard_database()`, `perform_protective_backup()`, `_backup_posterboard_database()`
 - User message: "Device locked - unlock and keep awake"
 
 ### Connection Error Detection
@@ -607,7 +603,6 @@ backup in the persistent app-data store
   from the same query unless it is pinned explicitly.
 - iOS 27+ apply: prompts for password via QInputDialog if encryption is enabled and `use_encrypted_backup` is set
 - Phase 3 passes the password to `mb.restore(password=backup_password)`
-- `psysbackup` capture is skipped if encrypted **without a password** (cannot read manifest)
 
 ## Async/Await Patterns
 
@@ -624,7 +619,7 @@ Progress callbacks pass through the call chain:
 ```
 update_label (UI)
   → _backup_progress() / progress_callback
-  → psysbackup() / perform_protective_backup() / backup_posterboard_database()
+  → perform_protective_backup() / backup_posterboard_database()
   → mb.backup() / mb.restore() progress callbacks
 ```
 
@@ -633,7 +628,6 @@ update_label (UI)
 | Operation | Max Retries | Backoff | Errors Handled |
 |-----------|-------------|---------|----------------|
 | Protective Backup connect | 5 | 2s, 4s, 8s, 15s | Connection |
-| psysbackup (pre-reset capture) | 3 | 2s, 4s | Connection, Device Locked |
 | PosterBoard Backup | 3 | 2s, 4s | Connection, Device Locked |
 | Phase 2 Sparse Restore | 2 | 25s once (if drop at 0%) | Transient |
 | Phase 3 Restore | 18 | 3s fixed | Transient (service not ready) |

@@ -1,8 +1,7 @@
 """``Nugget reset`` — reset tweak sections back to defaults (the GUI's
 "Reset Tweaks" flow).
 
-Captures the device's original plists first (``psysbackup``), then restores
-them so the selected sections go back to stock.
+Restores stock values for the selected sections straight to the device.
 """
 
 import argparse
@@ -15,8 +14,8 @@ def add_parser(subp):
     parser = subp.add_parser(
         "reset",
         help="Reset tweak sections to defaults",
-        description="Restore the device's original plists for the selected "
-                    "sections (uses the same psysbackup + restore path as the GUI).",
+        description="Restore stock values for the selected sections "
+                    "(uses the same reset + restore path as the GUI).",
     )
     parser.add_argument("--udid", default=None, help="target device UDID")
     parser.add_argument("--status-bar", action="store_true",

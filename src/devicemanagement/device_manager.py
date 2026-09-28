@@ -54,7 +54,6 @@ from src.restore.afc_media import (
     afc_media_dir_for, afc_media_enabled, describe_media_store,
     media_store_verified,
 )
-from src.restore.original_plist import psysbackup, materialize_plist, is_empty_plist, mobile_user_fallback_path
 from src.restore.protective import log_error, log_info, log_warn
 
 def get_files_list_str(files_list: list[FileToRestore] = None) -> str:
@@ -442,7 +441,7 @@ class DeviceManager:
             prog = f" ({progress:6.1f}% )"
         self.update_label(QCoreApplication.tr("Restoring to device...{0}{1}").format(prog, self.do_not_unplug))
     def _backup_progress(self, update_label):
-        """Progress callback for backup-driven captures (psysbackup).
+        """Progress callback for the pre-restore device backups.
 
         Unlike ``progress_callback`` it does not depend on ``self.update_label``
         (only set by ``start_restore``), so it is safe to call before any
@@ -905,45 +904,6 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
             else:
                 update_label(QCoreApplication.tr("Warning: could not back up the PosterBoard database automatically."))
 
-    async def _get_lockdown_values(self) -> dict:
-        udid = self.get_current_device_udid()
-        if not udid:
-            return {}
-        async with lockdown_session(udid) as ld:
-            return dict(ld.all_values)
-
-    def _get_original_plist_paths(self) -> list[str]:
-        return [loc.value for loc in FileLocation]
-
-    async def _capture_original_plists(self, udid: str, update_label) -> dict:
-        """Run the psysbackup capture and return usable originals.
-
-        The mobile-user copy (HomeDomain) of a managed-preference file is
-        preferred over the managed copy: tweaks and resets write only to
-        ``/var/Managed Preferences/mobile/*.plist``, so the HomeDomain copy is
-        the truest original even when tweaks were applied before the capture
-        ran. The managed copy is used only when no HomeDomain copy exists.
-        Entries that are still empty after both sources are dropped — a nulled
-        plist must never be stored as an "original", otherwise reset keeps
-        restoring the nulled state.
-        """
-        paths = self._get_original_plist_paths()
-        fallbacks = [mobile_user_fallback_path(p) for p in paths]
-        fallbacks = [f for f in fallbacks if f is not None and f not in paths]
-        captured = await psysbackup(
-            udid, paths + fallbacks, update_label, self._backup_progress(update_label), self._get_backup_password())
-        originals = {}
-        for path in paths:
-            data = None
-            fallback = mobile_user_fallback_path(path)
-            if fallback:
-                data = captured.get(fallback)
-            if data is None or is_empty_plist(data):
-                data = captured.get(path)
-            if data is not None and not is_empty_plist(data):
-                originals[path] = data
-        return originals
-
     async def _apply_tweak_pass(self, update_label=lambda x: None, templates: list = None, prepared_backup_root=None, prompt_password=None, prompt_choice=None, skip_protective_backup: bool = False):
         """Generate all tweak files and restore them to the device in one pass.
 
@@ -1158,29 +1118,12 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
             if not udid:
                 raise NuggetException(QCoreApplication.tr("No device connected."))
             dev_version = self.get_current_device_version()
-            # The original-plist capture (psysbackup) exists for iOS 27 only.
-            # On iOS 26 the reset matches the original Nugget: it writes empty
-            # files straight to disk, no capture.
-            all_values = {}
-            original_plists = {}
-            if dev_version and Version(dev_version) >= Version("27.0"):
-                all_values = await self._get_lockdown_values()
-                update_label(QCoreApplication.tr("Capturing original plists..."))
-                # The capture is best-effort: on a device that is already half-broken
-                # the mobilebackup2 protocol chatter can fail (e.g. PlistParseError
-                # mid-stream). Falling back to stock defaults restores the device
-                # instead of aborting the whole reset on a metadata capture.
-                try:
-                    captured = await self._capture_original_plists(udid, update_label)
-                except Exception as e:
-                    print(f"[reset_tweaks] Original-plist capture failed: {e}")
-                    update_label(QCoreApplication.tr("Original plists unavailable — restoring default values..."))
-                    captured = {}
-                for path, data in captured.items():
-                    try:
-                        original_plists[path] = plistlib.loads(data)
-                    except Exception:
-                        continue
+            # No original-plist capture: reset writes stock values straight to
+            # the device on every iOS version. Pulling the device's own plists
+            # first (the old psysbackup step) was only ever done for iOS 27, and
+            # it did not buy much — the managed-preferences copy the tweaks write
+            # to already holds the tweaked values, so restoring a captured
+            # "original" re-wrote the very tweaks the user asked to remove.
             files_to_null: list[str] = []
             uses_domains = False
 
@@ -1250,10 +1193,7 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
 
             # add the files to null from the list
             for file_path in files_to_null:
-                original = original_plists.get(file_path)
-                if original is not None:
-                    contents = plistlib.dumps(materialize_plist(original, all_values))
-                elif dev_version and Version(dev_version) >= Version("27.0"):
+                if dev_version and Version(dev_version) >= Version("27.0"):
                     # Restore a valid empty plist instead of a zero-byte
                     # file: on iOS 26.2+ a truncated plist (e.g. an empty
                     # com.apple.springboard.plist) makes SpringBoard crash
@@ -1263,9 +1203,7 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                     contents = plistlib.dumps({})
                 else:
                     # iOS 26: reset matches the original Nugget, which writes
-                    # empty (zero-byte) files without any capture. The managed
-                    # preferences copy on iOS 26 already holds the tweaked
-                    # values, so restoring it would just re-write the tweaks.
+                    # empty (zero-byte) files without any capture.
                     contents = b""
                 self.concat_file(
                     contents=contents,

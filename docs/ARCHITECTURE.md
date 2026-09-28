@@ -98,8 +98,10 @@ Key methods:
   merges them into one restore list, handles backup-encryption prompts,
   then calls `start_restore()`.
 - `start_restore()` → `restore_files()` (src/restore).
-- `reset_tweaks()` — captures original plists via `psysbackup()`, then builds
-  "restore the originals" files per selected page.
+- `reset_tweaks()` — builds "restore stock values" files per selected page.
+  No pre-reset capture: the device's own plists are never pulled, because the
+  managed-preferences copy the tweaks write to already holds the tweaked
+  values, so restoring a captured "original" would re-apply the tweaks.
 
 #### Apply flow (end-to-end)
 ```
@@ -361,15 +363,6 @@ the `ProtectiveBackupCache` to `protective_cache.py` (both re-exported from
 - `check_disk_space()` — sizes the requirement from the device's
   real used storage; `GOLDENNUGGET_MIN_FREE_GB` overrides the floor and
   `GOLDENNUGGET_CACHE_REFRESH_SECS` tunes the cache refresh interval.
-
-### `original_plist.py`
-`psysbackup()` — **selective** capture of the plists listed by `FileLocation`
-(ProtectiveBackupService + mid-stream keep-filter, no full-device copy) so
-Reset can restore originals instead of empty files. When backup encryption is
-enabled it returns `{}` (skips) **only if no `backup_password` is provided**;
-with a password it decrypts the manifest and proceeds. The capture is
-best-effort: a failure falls back to stock `{}` defaults rather than aborting
-the reset.
 
 ---
 
