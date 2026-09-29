@@ -9,7 +9,7 @@ on:
         default: true
         type: boolean
       build_for_macos_intel_legacy:
-        description: 'Build macOS Intel (legacy: Python 3.9, macOS 12 min)'
+        description: 'Build macOS Intel (legacy: macOS 12 min)'
         required: false
         default: false
         type: boolean
@@ -85,7 +85,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Create venv and install requirements
         run: |

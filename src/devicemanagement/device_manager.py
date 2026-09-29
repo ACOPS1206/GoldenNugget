@@ -1131,7 +1131,8 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
             files_to_null: list[str] = []
             uses_domains = False
 
-            # use if-statements instead of match (switch) statements for compatibility with Python 3.9
+            # plain if-chains, not match: the page set is a long, stable list
+            # and a flat chain keeps the diff readable when pages are added
             for page in reset_pages:
                 if page == Page.StatusBar:
                     ## STATUS BAR
