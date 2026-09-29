@@ -19,6 +19,10 @@ class PreferenceManager:
         self.skip_setup = True
         self.supervised = False
         self.organization_name = ""
+        # Write the "AutoSave" preset on every tweak change and load it back on
+        # startup. Turning it off stops both halves; the preset file itself is
+        # left alone so an existing one can still be loaded by hand.
+        self.tweak_autosave = True
 
     # PosterBoard Configuration Database Saving
     def get_pbconfigs_prefs() -> QSettings:

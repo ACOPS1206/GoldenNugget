@@ -77,8 +77,18 @@ class PresetBanner(QFrame):
             QPushButton:hover {{ color: {c.accent_hover}; }}
         """)
 
-    def set_active_preset(self, name: str):
-        self.active_lbl.setText(name or QCoreApplication.translate("Nugget", "AutoSave"))
+    def set_active_preset(self, name: str, autosave: bool = True):
+        """Show ``name``, or a placeholder when no preset is loaded.
+
+        With autosave off there is nothing behind the banner, so claiming
+        "AutoSave" would be a lie — the tweaks on screen belong to no preset.
+        """
+        if name:
+            self.active_lbl.setText(name)
+        elif autosave:
+            self.active_lbl.setText(QCoreApplication.translate("Nugget", "AutoSave"))
+        else:
+            self.active_lbl.setText(QCoreApplication.translate("Nugget", "Not Saved"))
 
 
 class PresetWidget(QWidget):
@@ -157,7 +167,15 @@ class PresetWidget(QWidget):
     def refresh(self):
         """Recompute and display the currently active preset."""
         name = self._current_preset_name()
-        self.banner.set_active_preset(name)
+        self.banner.set_active_preset(name, autosave=self._autosave_enabled())
+
+    def _autosave_enabled(self) -> bool:
+        if self.window is None:
+            return True
+        try:
+            return bool(self.window.autosave_enabled())
+        except Exception:
+            return True
 
     def _current_preset_name(self) -> str:
         if self.window is None:

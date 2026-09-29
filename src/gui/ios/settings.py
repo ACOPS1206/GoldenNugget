@@ -305,6 +305,23 @@ class IOSSettingsPage(QWidget):
             self._hotload.set_enabled(checked)
         return handler
 
+    def _on_autosave_toggled(self, checked: bool):
+        """Persist the AutoSave option and re-label the home preset banner.
+
+        Nothing is written or deleted here: an existing AutoSave preset stays
+        on disk and remains loadable from the preset list, it just stops being
+        updated and loaded at startup.
+        """
+        pref = self.window.device_manager.pref_manager
+        pref.tweak_autosave = checked
+        self.window.settings.setValue("tweak_autosave", checked)
+        self.window._sync_settings()
+        try:
+            self.window._refresh_preset_widgets()
+        except Exception:
+            # a banner refresh must never break the switch itself
+            pass
+
     def _on_reset_pairing_clicked(self):
         if self.window.device_manager.data_singleton.current_device is None:
             QMessageBox.information(
@@ -744,6 +761,24 @@ class IOSSettingsPage(QWidget):
         self.content_layout.addWidget(IOSSectionHeader(
             QCoreApplication.translate("Nugget", "Presets")
         ))
+
+        self.autosave_switch = self._make_switch(
+            QCoreApplication.translate("Nugget", "Save Tweaks Automatically"),
+            self.window.device_manager.pref_manager.tweak_autosave,
+            self._on_autosave_toggled,
+        )
+        autosave_hint = QLabel(QCoreApplication.translate(
+            "Nugget",
+            "Saves your tweak selection to a built-in \"AutoSave\" preset "
+            "and restores it on the next launch. Turn off to keep changes "
+            "for this session only — an existing AutoSave preset stays on "
+            "disk and is not loaded at startup."))
+        autosave_hint.setWordWrap(True)
+        autosave_hint.setStyleSheet(f"color: {c.text_secondary}; font-size: 12px;")
+        hint_row = QHBoxLayout()
+        hint_row.setContentsMargins(16, 0, 16, 8)
+        hint_row.addWidget(autosave_hint, 1)
+        self.content_layout.addLayout(hint_row)
 
         card = QWidget()
         presets_layout = QVBoxLayout(card)

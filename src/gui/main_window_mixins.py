@@ -267,6 +267,7 @@ class SettingsMixin:
             organization_name = self.settings.value("organization_name", "", type=str)
             use_encrypted_backup = self.settings.value("use_encrypted_backup", False, type=bool)
             use_afc_media = self.settings.value("use_afc_media", True, type=bool)
+            tweak_autosave = self.settings.value("tweak_autosave", True, type=bool)
 
             self.device_manager.pref_manager.auto_reboot = auto_reboot
             set_ignore_frame_limit(ignore_frame_limit)
@@ -278,11 +279,26 @@ class SettingsMixin:
             self.device_manager.pref_manager.skip_setup = skip_setup
             self.device_manager.pref_manager.supervised = supervised
             self.device_manager.pref_manager.organization_name = organization_name
+            self.device_manager.pref_manager.tweak_autosave = tweak_autosave
         except Exception as e:
             # Never silent: a NameError here used to abort every assignment
             # below it, so the app quietly booted with default preferences
             # (and the Settings switches read back OFF after a restart).
             get_logger("gui").warning("loadSettings failed: %s", e, exc_info=True)
+
+
+    def autosave_enabled(self) -> bool:
+        """Whether the AutoSave preset is written/loaded at all.
+
+        Read through instead of cached on the window so flipping the Settings
+        switch takes effect immediately, with no restart.
+        """
+        try:
+            return bool(self.device_manager.pref_manager.tweak_autosave)
+        except Exception:
+            # never let a missing pref break tweak handling: autosave is the
+            # historical default, so fall back to it
+            return True
 
 
     def _load_last_preset(self):
@@ -291,8 +307,13 @@ class SettingsMixin:
         Prefers the AutoSave preset (written on every tweak change) so the UI
         restores the most recent configuration. Falls back to the last
         manually-loaded preset when no autosave exists.
+
+        With autosave turned off the AutoSave preset is NOT loaded: the file is
+        deliberately left on disk (it can still be loaded by hand), but
+        restoring a frozen snapshot on every launch would be misleading when
+        the app no longer keeps it up to date.
         """
-        if "AutoSave" in self.preset_manager.list_presets():
+        if self.autosave_enabled() and "AutoSave" in self.preset_manager.list_presets():
             self.preset_manager.load_preset("AutoSave")
             # Rewrite AutoSave right away so stale entries (e.g. daemons that
             # are no longer exposed in the UI) are purged from disk on the
@@ -311,6 +332,10 @@ class SettingsMixin:
 
     def _on_tweak_changed(self):
         """Called when any tweak value changes - schedule autosave."""
+        if not self.autosave_enabled():
+            # Still registered (so the callback is never dangling) but inert:
+            # no debounce timer is even scheduled while the option is off.
+            return
         if self._preset_autosave_pending:
             return
         self._preset_autosave_pending = True
@@ -321,6 +346,10 @@ class SettingsMixin:
     def _save_autosave_preset(self):
         """Save current tweak state to AutoSave preset."""
         self._preset_autosave_pending = False
+        if not self.autosave_enabled():
+            # Second guard: a debounce timer scheduled before the switch was
+            # flipped off still fires, and must not resurrect the file.
+            return
         try:
             self.preset_manager.save_preset(
                 "AutoSave", "Automatic save of last tweak configuration", tags=["auto"],
