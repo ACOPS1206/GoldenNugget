@@ -1,4 +1,5 @@
 from .status_setter import Setter, StatusBarItem
+from .statusbar_archive import ARCHIVE_DOMAIN, ARCHIVE_PATH, build_archive
 from ..tweak_classes import Tweak, _notify_tweak_change
 from src.utils.file_to_restore import FileToRestore
 
@@ -16,12 +17,27 @@ class StatusBarTweak(Tweak):
         _notify_tweak_change()
         return None
 
-    # iOS 27+: the status bar is Speakeasy, a SpringBoard feature flag, but
-    # writing SpeakeasyNewStatusBar fails due to no write permissions, so the
-    # feature is disabled. device_manager only calls apply_tweak for iOS >= 27;
-    # the old <27 Speakeasy write was unreachable dead code and is gone.
-    def apply_tweak(self, flag_plist: dict = None, version: str = "27.0") -> dict:
-        return flag_plist
+    # iOS 27+: the classic binary statusBarOverrides file is no longer read and
+    # the SpeakeasyNewStatusBar feature flag cannot be written by a restore, so
+    # the carrier name is delivered as the StatusBarOverrides.archive that
+    # SpringBoard unarchives itself. It lives in HomeDomain, the same domain
+    # the classic path uses, so this is an ordinary restore file -- no exploit.
+    def apply_ios27_tweak(self, files_to_restore: list) -> None:
+        """Stage StatusBarOverrides.archive (iOS 27+).
+
+        Only the carrier names survive on iOS 27; every other override in the
+        struct has no representation in the archive and is dropped, so the page
+        hides them (see src/gui/ios/statusbar.py).
+        """
+        if not self.enabled:
+            return
+        primary = self.get_carrier_override() if self.is_carrier_overridden() else None
+        secondary = self.get_secondary_carrier_override() if self.is_secondary_carrier_overridden() else None
+        files_to_restore.append(FileToRestore(
+            contents=build_archive(primary, secondary),
+            restore_path=ARCHIVE_PATH,
+            domain=ARCHIVE_DOMAIN
+        ))
 
     # iOS 26.x (pre-27): classic binary statusBarOverrides in HomeDomain.
     def apply_classic_tweak(self, files_to_restore: list) -> None:

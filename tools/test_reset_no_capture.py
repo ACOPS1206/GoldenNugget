@@ -176,10 +176,44 @@ def test_ios26_daemons_page_still_written():
           .get("com.apple.magicswitchd.companion") is True)
 
 
+def test_ios27_status_bar_resets_the_archive():
+    print("\niOS 27 Status Bar reset: empty archive, no FeatureFlags write")
+    from src.tweaks.status_bar.statusbar_archive import (
+        is_reset_archive, carrier_names)
+
+    fake, errors, _ = run_reset("27.0", [Page.StatusBar])
+    check("no exception escaped the reset", not errors, repr(errors[:1]))
+    data = fake.written.get(FileLocation.statusBarOverridesArchive.value)
+    check("writes StatusBarOverrides.archive", data is not None)
+    check("the payload is a valid reset archive",
+          data is not None and is_reset_archive(data), repr(data[:16]))
+    check("the reset archive carries no carrier name",
+          data is not None and carrier_names(data) == (None, None))
+    check("no SpeakeasyNewStatusBar FeatureFlags write",
+          FileLocation.featureflags.value not in fake.written)
+    check("the reset is not a null/zero-byte file", data not in (b"", None),
+          f"{len(data) if data else 0} bytes")
+
+
+def test_ios26_status_bar_still_resets_the_classic_file():
+    print("\niOS 26 Status Bar reset: classic binary file unchanged")
+    fake, errors, _ = run_reset("26.2", [Page.StatusBar])
+    check("no exception escaped the reset", not errors, repr(errors[:1]))
+    restored = [getattr(f, "restore_path", f) for f in fake.restored]
+    check("writes the classic statusBarOverrides, not the archive",
+          "/Library/SpringBoard/statusBarOverrides" in restored, repr(restored))
+    check("the classic file still goes to HomeDomain",
+          any(getattr(f, "domain", None) == "HomeDomain" for f in fake.restored))
+    check("no archive on iOS 26",
+          FileLocation.statusBarOverridesArchive.value not in fake.written)
+
+
 # =============================================================================
 test_capture_is_gone()
 test_ios27_writes_valid_empty_plists()
 test_ios26_keeps_zero_byte_files()
 test_ios26_daemons_page_still_written()
+test_ios27_status_bar_resets_the_archive()
+test_ios26_status_bar_still_resets_the_classic_file()
 
 print(f"\nALL {PASS} CHECKS PASSED")

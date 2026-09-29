@@ -58,23 +58,16 @@ class DeviceBarMixin:
         features on this device. Kept central so the gating survives every
         re-apply point (device refresh / selection).
 
-        Only ever HIDES — it never re-shows a button that the device-version
-        rules hid (e.g. Status Bar is disabled on iOS 27 because the Speakeasy
-        override file is dropped by the wipe). The Status Bar stays hidden if
-        either HotLoad OR iOS >= 27 says so.
+        Only ever HIDES — it never re-shows a button that HotLoad hid. The
+        Status Bar page used to be force-hidden on iOS 27 because the Speakeasy
+        feature flag could not be written; it now delivers the carrier name
+        through StatusBarOverrides.archive, so the page stays reachable there
+        (trimmed down to the carrier rows by the page itself).
         """
         hidden = _hidden_feature_names()
         if hidden:
             print(f"[HotLoad] Hiding feature pages: {', '.join(sorted(hidden))}")
-        # Status Bar is also feature-broken on iOS 27 (Speakeasy override file
-        # dropped by the safe-state-recovery wipe) even when HotLoad allows it.
-        is_ios27 = False
-        try:
-            ver = self.device_manager.get_current_device_version()
-            is_ios27 = ver != "" and Version(ver) >= Version("27.0")
-        except Exception:
-            is_ios27 = False
-        statusbar_hidden = "Status Bar" in hidden or is_ios27
+        statusbar_hidden = "Status Bar" in hidden
         # Sidebar (classic shell) buttons
         btn_map = {
             "Liquid Glass": self.ui.liquidGlassPageBtn,
@@ -212,19 +205,18 @@ class DeviceBarMixin:
                     parsed_ver = Version(version)
                     for view in views:
                         view.setVisible(device_ver >= parsed_ver)
-            # The Status Bar override file is dropped by the iOS 27
-            # safe-state-recovery wipe, so the whole feature is hidden on iOS 27+.
+            # The Status Bar page is no longer force-hidden on iOS 27 -- the
+            # carrier name is delivered through StatusBarOverrides.archive.
+            # Visibility is owned by _apply_hidden_feature_gating() (HotLoad
+            # aware), so just re-apply it here. The Solarium fallback tweak is
+            # a different, iOS 26-only tweak and keeps its own gating.
             if device_ver >= Version("27.0"):
-                self.ui.statusBarPageBtn.hide()
                 if hasattr(self, "ios_tweaks"):
                     self.ios_tweaks.set_force_solarium_fallback_visible(False)
             else:
-                self.ui.statusBarPageBtn.show()
                 if hasattr(self, "ios_tweaks"):
                     self.ios_tweaks.set_force_solarium_fallback_visible(True)
-            # mirror the Status Bar gating in the iOS UI
-            if hasattr(self, "ios_home"):
-                self.ios_home.set_statusbar_visible(device_ver < Version("27.0"))
+            self._apply_hidden_feature_gating()
 
             # force video looping on iPads (loop gated off the classic widgets)
             is_iphone = self.device_manager.get_current_device_model().startswith("iPhone")

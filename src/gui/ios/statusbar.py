@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QHBoxLayout, QLabel,
     QDialog, QPushButton
 )
+from packaging.version import Version, InvalidVersion
 
 from src.gui.ios.components import (
     IOSSectionHeader, IOSSwitch, IOSSettingsRow,
@@ -11,6 +12,12 @@ from src.gui.ios.components import (
 from src.gui.theme import ColorThemeManager
 from src.tweaks.tweaks import tweaks, TweakID
 from src.tweaks.status_bar.status_setter import StatusBarItem
+
+# iOS 27 dropped the classic statusBarOverrides struct: only the carrier name
+# survives, through StatusBarOverrides.archive. Everything else has no
+# representation there, so it is hidden rather than shown as a switch that
+# silently does nothing. See src/tweaks/status_bar/statusbar_archive.py.
+FIRST_ARCHIVE_VERSION = "27.0"
 
 
 class IOSStatusBarPage(QWidget):
@@ -36,16 +43,21 @@ class IOSStatusBarPage(QWidget):
         self.content_layout.setContentsMargins(16, 16, 16, 32)
         self.content_layout.setSpacing(8)
 
+        # (widget, survives iOS 27) for every card and section header, so the
+        # whole page can be re-gated whenever the connected device changes.
+        self._rows: list[tuple[QWidget, bool]] = []
+
         # Master enable switch
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Status Bar Overrides")))
+        self._header(QCoreApplication.translate("Nugget", "Status Bar Overrides"), survives_ios27=True)
         self.enabled_switch = self._make_switch(
             QCoreApplication.translate("Nugget", "Enable Status Bar Modifications"),
             self.status_manager.enabled,
             self._on_enabled_toggled,
+            survives_ios27=True,
         )
 
         # Text rows
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Text")))
+        self._header(QCoreApplication.translate("Nugget", "Text"), survives_ios27=True)
         self.time_row = self._make_text_row(
             QCoreApplication.translate("Nugget", "Change Status Bar Time Text*"),
             self.status_manager.is_time_overridden(),
@@ -75,6 +87,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.is_carrier_overridden(),
             self.status_manager.get_carrier_override(),
             self.status_manager.set_carrier_override, self.status_manager.unset_carrier_override,
+            survives_ios27=True,
         )
         self.badge_row = self._make_text_row(
             QCoreApplication.translate("Nugget", "Change Service Badge Text"),
@@ -87,6 +100,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.is_secondary_carrier_overridden(),
             self.status_manager.get_secondary_carrier_override(),
             self.status_manager.set_secondary_carrier_override, self.status_manager.unset_secondary_carrier_override,
+            survives_ios27=True,
         )
         self.secondary_badge_row = self._make_text_row(
             QCoreApplication.translate("Nugget", "Secondary Service Badge"),
@@ -96,7 +110,7 @@ class IOSStatusBarPage(QWidget):
         )
 
         # Number rows
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Levels")))
+        self._header(QCoreApplication.translate("Nugget", "Levels"))
         self.gsm_row = self._make_number_row(
             QCoreApplication.translate("Nugget", "Change Signal Strength"),
             self.status_manager.is_gsm_signal_strength_bars_overridden(),
@@ -141,7 +155,7 @@ class IOSStatusBarPage(QWidget):
         )
 
         # Raw signal strength
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Raw Signal Strength")))
+        self._header(QCoreApplication.translate("Nugget", "Raw Signal Strength"))
         self._make_switch(
             QCoreApplication.translate("Nugget", "Show Numeric Cellular Strength"),
             self.status_manager.is_raw_gsm_signal_shown(),
@@ -154,7 +168,7 @@ class IOSStatusBarPage(QWidget):
         )
 
         # Item show/hide toggles
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Items")))
+        self._header(QCoreApplication.translate("Nugget", "Items"))
         for name, item in [
             (QCoreApplication.translate("Nugget", "Disable Focus Mode icon"), StatusBarItem.QuietModeStatusBarItem),
             (QCoreApplication.translate("Nugget", "Disable Airplane Mode icon"), StatusBarItem.AirplaneModeStatusBarItem),
@@ -180,21 +194,63 @@ class IOSStatusBarPage(QWidget):
             )
 
         # Silly mode
-        self.content_layout.addWidget(IOSSectionHeader(QCoreApplication.translate("Nugget", "Extras")))
+        self._header(QCoreApplication.translate("Nugget", "Extras"))
         self._make_switch(
             QCoreApplication.translate("Nugget", "Silly Mode"),
             self.status_manager.is_silly_mode_enabled(),
             lambda checked: self.status_manager.toggle_silly_mode(checked),
         )
 
+        # Explains the trimmed page on iOS 27; hidden everywhere else.
+        self._ios27_note = QLabel(QCoreApplication.translate(
+            "Nugget",
+            "iOS 27 replaced the status bar override file, so only the carrier "
+            "name can be changed here. The other options need iOS 26 or lower."
+        ))
+        self._ios27_note.setWordWrap(True)
+        self.content_layout.addWidget(self._ios27_note)
+
         self.content_layout.addStretch()
 
         self._retheme()
         ColorThemeManager.instance().theme_changed.connect(self._retheme)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The page outlives device changes, so re-gate every time it is shown.
+        self._apply_ios27_gating()
+
+    def _current_version(self) -> str:
+        try:
+            return self.window.device_manager.get_current_device_version() or ""
+        except Exception:
+            return ""
+
+    def _apply_ios27_gating(self):
+        is_ios27 = False
+        version = self._current_version()
+        if version:
+            try:
+                is_ios27 = Version(version) >= Version(FIRST_ARCHIVE_VERSION)
+            except InvalidVersion:
+                is_ios27 = False
+        for widget, survives in self._rows:
+            widget.setVisible(not is_ios27 or survives)
+        self._ios27_note.setVisible(is_ios27)
+
+    def _header(self, title: str, survives_ios27: bool = False):
+        header = IOSSectionHeader(title)
+        self.content_layout.addWidget(header)
+        self._rows.append((header, survives_ios27))
+        return header
+
     def _retheme(self):
         c = ColorThemeManager.instance().colors
         self._scroll.setStyleSheet(f"background-color: {c.bg_primary}; border: none;")
+        # Transparent background so it does not read as a dark box, muted text
+        # because it is a note rather than a value.
+        self._ios27_note.setStyleSheet(
+            f"background-color: transparent; color: {c.text_secondary}; font-size: 14px;")
         for i in range(self.content_layout.count()):
             item = self.content_layout.itemAt(i)
             if item is None:
@@ -242,7 +298,7 @@ class IOSStatusBarPage(QWidget):
                 self.status_manager.unset_item_override(item)
         return handler
 
-    def _make_switch(self, title: str, checked: bool, on_toggled):
+    def _make_switch(self, title: str, checked: bool, on_toggled, survives_ios27: bool = False):
         c = ColorThemeManager.instance().colors
         card = QWidget()
         row = QHBoxLayout(card)
@@ -255,9 +311,9 @@ class IOSStatusBarPage(QWidget):
         switch.toggled.connect(on_toggled)
         row.addWidget(switch)
         self.content_layout.addWidget(card)
+        self._rows.append((card, survives_ios27))
         return switch
-
-    def _make_text_row(self, title: str, overridden: bool, current: str, setter, unsetter):
+    def _make_text_row(self, title: str, overridden: bool, current: str, setter, unsetter, survives_ios27: bool = False):
         c = ColorThemeManager.instance().colors
         card = QWidget()
         row = QHBoxLayout(card)
@@ -291,8 +347,8 @@ class IOSStatusBarPage(QWidget):
         row.addWidget(edit_btn)
 
         self.content_layout.addWidget(card)
+        self._rows.append((card, survives_ios27))
         return switch
-
     def _on_text_row_toggled(self, checked: bool, setter, unsetter, label, value_lbl, current: str):
         if checked:
             setter(current)
@@ -308,7 +364,7 @@ class IOSStatusBarPage(QWidget):
             value_lbl.setText(value if value else QCoreApplication.translate("Nugget", "Default"))
             label.setText(title)
 
-    def _make_number_row(self, title: str, overridden: bool, current: int, setter, unsetter, min_val: int, max_val: int):
+    def _make_number_row(self, title: str, overridden: bool, current: int, setter, unsetter, min_val: int, max_val: int, survives_ios27: bool = False):
         c = ColorThemeManager.instance().colors
         card = QWidget()
         row = QHBoxLayout(card)
@@ -334,8 +390,8 @@ class IOSStatusBarPage(QWidget):
         row.addWidget(edit_btn)
 
         self.content_layout.addWidget(card)
+        self._rows.append((card, survives_ios27))
         return switch
-
     def _on_number_row_toggled(self, checked: bool, setter, unsetter, value_lbl, current: int):
         if checked:
             setter(current)

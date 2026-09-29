@@ -44,6 +44,7 @@ from src.controllers.path_handler import fix_windows_path
 from src.exceptions.nugget_exception import NuggetException
 
 from src.tweaks.tweaks import tweaks, TweakID, BasicPlistTweak, AdvancedPlistTweak, NullifyFileTweak, StatusBarTweak
+from src.tweaks.status_bar.statusbar_archive import build_reset_archive
 from src.tweaks.posterboard.posterboard_tweak import PosterboardTweak
 from src.tweaks.posterboard.template_options.templates_tweak import TemplatesTweak
 from src.tweaks.icon_themes.icon_themes_tweak import IconThemesTweak
@@ -972,10 +973,13 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                         uses_domains = True
                 elif isinstance(tweak, StatusBarTweak):
                     if Version(self.get_current_device_version()) >= Version("27.0"):
-                        # iOS 27: the status bar is Speakeasy, a SpringBoard
-                        # feature flag — the classic statusBarOverrides file
-                        # is no longer read, so write the FeatureFlags plist.
-                        flag_plist = tweak.apply_tweak(flag_plist, version=self.get_current_device_version())
+                        # iOS 27: the classic binary statusBarOverrides file is
+                        # dead and the Speakeasy feature flag cannot be written,
+                        # but SpringBoard unarchives the carrier name itself
+                        # from StatusBarOverrides.archive in HomeDomain.
+                        tweak.apply_ios27_tweak(files_to_restore)
+                        if tweak.enabled:
+                            uses_domains = True
                     else:
                         # iOS 26 and below: classic binary statusBarOverrides
                         # in HomeDomain.
@@ -1133,21 +1137,21 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                     ## STATUS BAR
                     dev_version = self.get_current_device_version()
                     if dev_version and Version(dev_version) >= Version("27.0"):
-                        # iOS 27: the status bar is Speakeasy, a SpringBoard
-                        # feature flag — disable it instead of writing the
-                        # unread classic statusBarOverrides file. An empty flag
-                        # dict (no "Enabled" key) keeps SpringBoard's default
-                        # behavior — {"Enabled": False} could be read as
-                        # disabling the whole Speakeasy status bar.
+                        # iOS 27: SpringBoard reads the carrier name from
+                        # StatusBarOverrides.archive. Writing a valid archive
+                        # with no cellular entries is the reset -- SpringBoard
+                        # decodes it as "no overrides" and unlinks the file
+                        # itself, which brings the stock carrier names back.
+                        # The old SpeakeasyNewStatusBar FeatureFlags write is
+                        # gone: a restore cannot write that plist on iOS 27
+                        # anyway, and poking /var/preferences risks tripping
+                        # Security Recovery.
                         self.concat_file(
-                            contents=plistlib.dumps({
-                                "SpringBoard": {
-                                    "SpeakeasyNewStatusBar": {}
-                                }
-                            }),
-                            path=FileLocation.featureflags.value,
+                            contents=build_reset_archive(),
+                            path=FileLocation.statusBarOverridesArchive.value,
                             files_to_restore=files_to_restore
                         )
+                        uses_domains = True
                     else:
                         # iOS 26 and below: the tweak writes a classic binary
                         # statusBarOverrides file. Reset it to a fresh (all-

@@ -27,20 +27,24 @@ Wanted support? join our [Discord Server][server].
   - See documentation on the structure of tendies and batter files in [documentation.md](documentation.md)
 - Templates: Custom Operations and file editing
   - See documentation on the structure of batter files in [documentation.md](documentation.md)
-- psysbackup: backup system plist
-  - Required to make "reset tweaks" function work without damaging system.
-- Status Bar (disabled on iOS 27+, no write permissions for the Speakeasy feature flag)
-  - Change carrier name
-  - Change secondary carrier name
-  - Enable/Disable the primary or secondary carriers
-  - Change the number of WiFi/Cellular bars
-  - Change the battery capacity
-  - Change battery display detail
-  - Change time text
-  - Change date text (iPad only)
-  - Change breadcrumb text
-  - Show numeric WiFi/Cellular strength
-  - Hide or show many icons in the status bar
+- Status Bar
+  - iOS 26 and below: full override set
+    - Change carrier name
+    - Change secondary carrier name
+    - Enable/Disable the primary or secondary carriers
+    - Change the number of WiFi/Cellular bars
+    - Change the battery capacity
+    - Change battery display detail
+    - Change time text
+    - Change date text (iPad only)
+    - Change breadcrumb text
+    - Show numeric WiFi/Cellular strength
+    - Hide or show many icons in the status bar
+  - iOS 27 and above: carrier name only (the rest of the overrides have no
+    equivalent in the new status bar format and are hidden on that page)
+    - Change carrier name
+    - Change secondary carrier name
+    - Not yet verified on physical hardware, only on the iOS 27 simulator
 - Springboard Options
   - Set Lock Screen Footnote
   - Set Lock Screen Idle Auto-Lock Time

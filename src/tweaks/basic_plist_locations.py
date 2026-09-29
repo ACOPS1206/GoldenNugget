@@ -9,6 +9,12 @@ class FileLocation(Enum):
     footnote = "/var/containers/Shared/SystemGroup/systemgroup.com.apple.configurationprofiles/Library/ConfigurationProfiles/SharedDeviceConfiguration.plist"
     airdrop = "/var/Managed Preferences/mobile/com.apple.sharingd.plist"
     nanoregistry = "/var/mobile/Library/Preferences/com.apple.NanoRegistry.plist"
+
+    # Status Bar
+    # iOS 27+: SpringBoard unarchives the carrier name from this file.
+    # iOS 26 and below used the classic struct at
+    # /var/mobile/Library/SpringBoard/statusBarOverrides instead.
+    statusBarOverridesArchive = "/var/mobile/Library/SpringBoard/StatusBarOverrides.archive"
     
     # Internal Options
     globalPreferences = "/var/Managed Preferences/mobile/.GlobalPreferences.plist"

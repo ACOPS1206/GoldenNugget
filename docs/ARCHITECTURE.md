@@ -210,16 +210,30 @@ broken on iOS 26+).
 - `template_file.py` + `template_options/` — the `.batter`-style template
   format: JSON-defined option widgets (picker/remove/replace/set) that edit
   caml/xml/plist payloads at apply time.
-- `status_bar/status_setter.py` + `status_bar_tweak.py` — binary
-  `StatusBarOverrideData` struct (cffi, `-malign-double`) translated into the
-  Speakeasy FeatureFlags payload (`SpringBoard.SpeakeasyNewStatusBar` in
-  `FeatureFlags/Global.plist`); `apply_tweak` returns early (no-op) on iOS
-  ≥27.0 (no write permission). **The Speakeasy dict schema is explicitly
-  unconfirmed in code** (keys are "guesses" mirroring the classic
-  `statusBarOverrides`). Reset writes an empty dict
-  (`{"SpringBoard": {"SpeakeasyNewStatusBar": {}}}`) to avoid disabling the
-  whole status bar. Caveat: the UI offers status-bar controls on iOS 27+ but
-  the apply silently no-ops.
+- `status_bar/status_setter.py` + `status_bar_tweak.py` + `statusbar_archive.py`
+  — the UI state is the binary `StatusBarOverrideData` struct (cffi,
+  `-malign-double`), which is what gets written on **iOS 26 and below** as
+  `/Library/SpringBoard/statusBarOverrides` in HomeDomain
+  (`apply_classic_tweak`). On **iOS 27+** that file is no longer read and the
+  `SpeakeasyNewStatusBar` feature flag cannot be written by a restore at all,
+  so the tweak switches medium instead: `apply_ios27_tweak` stages
+  `/Library/SpringBoard/StatusBarOverrides.archive`, an `NSKeyedArchiver`
+  binary plist SpringBoard unarchives itself
+  (`_SBSystemStatusStatusBarOverridesArchiveRecord` → `STStatusBarData` →
+  `STStatusBarDataCellularEntry`), built by `statusbar_archive.py` with plain
+  `plistlib`. Same HomeDomain as the classic path, so it is an ordinary
+  restore file — no exploit and no out-of-band channel.
+  **Scope on iOS 27 is the carrier name only** (primary + secondary); the
+  archive has no representation for the time/battery/icon overrides, so
+  `src/gui/ios/statusbar.py` hides those rows on 27 instead of offering
+  switches that do nothing. Everything else in the cellular entry is written
+  with fixed verified values. Reset writes a *valid empty* record
+  (`build_reset_archive()`), which SpringBoard decodes as "no overrides" and
+  unlinks itself — the old FeatureFlags write is gone, since poking
+  `/var/preferences` on iOS 27 risks tripping Security Recovery. Unverified on
+  physical hardware: the format was validated on the iOS 27 simulator only.
+  Reference research:
+  <https://github.com/Prognosticate-X/ios27-carrier-lockscreen-research>
 
 ---
 
