@@ -102,32 +102,9 @@ class PosterboardTweak(Tweak):
         elif file_name == "com.apple.posterkit.provider.contents.userInfo":
             return set_plist_value(file=os.path.join(file_path, file_name), key="wallpaperRepresentingIdentifier", value=randomizedID)
         elif file_name.endswith("Wallpaper.plist"):
-            return self.update_for_family(set_plist_value(file=os.path.join(file_path, file_name), key="identifier", value=randomizedID, recursive=False))
+            return set_plist_value(file=os.path.join(file_path, file_name), key="identifier", value=randomizedID, recursive=False)
         return None
-    
-    def update_for_family(self, data: bytes):
-        # Bring a wallpaper in line with the Configs (Marble) model that iOS
-        # 26.4+ expects: family/name forced to Lavender and the top-level and
-        # nested identifiers kept consistent. System wallpapers (iOS 17 etc.)
-        # carry their own family/name and a distinct descriptor identifier
-        # that no longer resolve once Win11 26.4 moved to DB-driven configs,
-        # so every identifier field is rewritten to the randomized id.
-        plist = plistlib.loads(data)
-        # the randomized (top-level) identifier set by the caller
-        new_id = plist.get("identifier")
-        if ("assets" in plist
-            and "lockAndHome" in plist["assets"]
-            and "default" in plist["assets"]["lockAndHome"]):
-            default = plist["assets"]["lockAndHome"]["default"]
-            default["name"] = "Lavender"
-            # keep the nested identifier in sync with the top-level one so the
-            # provider can resolve the .ca animation files by that id
-            if new_id is not None:
-                default["identifier"] = new_id
-        plist["family"] = "Marble"
-        plist["name"] = "Lavender"
-        return plistlib.dumps(plist)
-        
+
 
     def recursive_add(self,
                       files_to_restore: list[FileToRestore],

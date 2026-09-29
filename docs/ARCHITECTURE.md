@@ -191,9 +191,12 @@ broken on iOS 26+).
   UUIDs, classifies parenthesized descriptor types into Photos / Mercury /
   Collections extension providers, registers them (`add_config`), and stages
   the modified DB (`update_sqlite`) appended as an AppDomain file; `ordered`
-  descriptors get reverse-sorted sequential ids. iOS 26.4+ uses a Configs
-  model (`update_for_family` forces the Marble/Lavender family) plus
-  `update_plist_id` rewriting. Optional live-photo (`create_live_photo_files`,
+  descriptors get reverse-sorted sequential ids. `update_plist_id` rewrites the
+  identifier-bearing plists (descriptor identifier, userInfo's
+  `wallpaperRepresentingIdentifier` and the wallpaper's own `identifier`);
+  the wallpaper's family/name and its nested `lockAndHome.default` entry are
+  left exactly as the source ships them. Optional live-photo
+  (`create_live_photo_files`,
   bundling HEIC thumbnails + `.aar` via `wrap_in_aar`) and video-loop CAML
   (`create_video_loop_files`) generation via `video_handler`.
 - `pb_config_manager.py` — the DB pipeline: pulls the live DB (from the
