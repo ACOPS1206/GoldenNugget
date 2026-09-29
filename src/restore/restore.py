@@ -854,7 +854,22 @@ async def _restore_ios27(back: backup.Backup, reboot: bool,
                          f"({describe_media_store(media_dir)})")
                 pushed = await restore_media_via_afc(
                     lc, media_dir,
-                    progress_callback=progress_callback)
+                    progress_callback=progress_callback,
+                    prompt_choice=prompt_choice,
+                    unlock_prompt=(
+                        QCoreApplication.tr("Device stayed locked"),
+                        QCoreApplication.tr(
+                            "The device has not been unlocked long enough to "
+                            "push your photos and videos back after the "
+                            "reboot.\n\n"
+                            "Unlock it, enter your passcode, and keep it "
+                            "connected via USB, then choose:\n\n"
+                            "  \u2022 Resume \u2014 keep waiting for the device "
+                            "to be unlocked and push your photos.\n"
+                            "  \u2022 Abort \u2014 stop now. Your photos are "
+                            "still safe in the backup cache on this computer, "
+                            "but they will not be on the device yet.")
+                    ))
                 if pushed.get("failed"):
                     raise NuggetException(
                         f"AFC media restore failed for {len(pushed['failed'])} "

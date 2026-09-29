@@ -870,6 +870,10 @@ class ApplyMixin:
         self._cache_restore_thread = worker
         worker.progress.connect(self._update_restore_label)
         worker.alert.connect(self.alert_message)
+        # The media push can hit a device that is paired but still locked after
+        # the reboot, so the recovery needs the same Abort/Resume dialog the
+        # apply gets.
+        worker.choice_prompt.connect(self.on_choice_prompt)
         worker.finished_with_result.connect(self._finish_cache_restore)
         worker.finished.connect(self._cache_restore_thread_finished)
         worker.finished.connect(worker.deleteLater)

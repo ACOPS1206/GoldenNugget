@@ -1,4 +1,4 @@
-from PySide6.QtCore import Signal, QThread, QSettings
+from PySide6.QtCore import QCoreApplication, Signal, QThread, QSettings
 from PySide6.QtWidgets import QMessageBox
 from typing import Optional
 # Module-level on purpose: the async workers below (``RestoreCacheThread.
@@ -157,10 +157,31 @@ class RestoreCacheThread(QThread):
     progress = Signal(str)
     alert = Signal(object)
     finished_with_result = Signal(bool, str)
+    choice_prompt = Signal(str, str, object)  # title, text, result box ("abort"/"resume", main-thread prompt)
+
+    # Same guard as ApplyThread: a stale worker must never block the recovery
+    # forever. The media push itself is NOT force-terminated — this only bounds
+    # how long the dialog waits for the user.
+    _PROMPT_TIMEOUT_SEC = 10 * 60
 
     def __init__(self, manager):
         super().__init__()
         self.manager = manager
+
+    def prompt_user_choice(self, title: str, text: str) -> str:
+        """Ask the user for a two-way decision on the main thread.
+
+        Same queued-signal pattern as ``ApplyThread.prompt_user_choice``:
+        modal dialogs must be built on the main thread, so the request is
+        relayed and this worker blocks on the boxed result. Returns "abort" or
+        "resume" ("abort" on timeout).
+        """
+        box = queue.Queue(maxsize=1)
+        self.choice_prompt.emit(title, text, box)
+        try:
+            return box.get(timeout=self._PROMPT_TIMEOUT_SEC)
+        except queue.Empty:
+            return "abort"
 
     def update_label(self, txt: str):
         self.progress.emit(txt)
@@ -309,7 +330,21 @@ class RestoreCacheThread(QThread):
                 self.update_label(
                     f"Restoring photos/videos over AFC ({describe_media_store(media_dir)})...")
                 pushed = await restore_media_via_afc(
-                    lc, media_dir, progress_callback=self._progress_cb)
+                    lc, media_dir, progress_callback=self._progress_cb,
+                    prompt_choice=self.prompt_user_choice,
+                    unlock_prompt=(
+                        QCoreApplication.tr("Device stayed locked"),
+                        QCoreApplication.tr(
+                            "The device has not been unlocked long enough to "
+                            "push your photos and videos back.\n\n"
+                            "Unlock it, enter your passcode, and keep it "
+                            "connected via USB, then choose:\n\n"
+                            "  \u2022 Resume \u2014 keep waiting for the device "
+                            "to be unlocked and push your photos.\n"
+                            "  \u2022 Abort \u2014 stop now. Your photos are "
+                            "still safe in the backup cache on this computer, "
+                            "but they will not be on the device yet.")
+                    ))
                 if pushed.get("failed"):
                     raise NuggetException(
                         f"AFC media restore failed for {len(pushed['failed'])} "

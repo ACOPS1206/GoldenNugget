@@ -25,6 +25,7 @@ import inspect
 import os
 import shutil
 import sys
+import time
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -45,6 +46,7 @@ from src.restore import restore as restore_mod
 
 PASS = 0
 TMP = tempfile.mkdtemp(prefix="gn_afc_media_")
+_REAL_AFC_SERVICE = afc_media.AfcService
 
 
 def check(name, cond, extra=""):
@@ -373,6 +375,11 @@ def test_restore_call_sites():
           "AFC media restore failed for" in src)
     check("Phase 5 logs what it is about to push",
           "describe_media_store(media_dir)" in src)
+    check("Phase 5 waits a locked device out instead of dying on it",
+          "open_afc_for_media" in inspect.getsource(afc_media)
+          and "unlock_prompt=" in src)
+    check("Phase 5 offers Abort/Resume for the locked-device wait",
+          "Device stayed locked" in src and "prompt_choice=prompt_choice" in src)
 
     worker = inspect.getsource(
         sys.modules["src.gui.thread_workers.apply_worker"])
@@ -382,6 +389,192 @@ def test_restore_call_sites():
           "AFC media restore failed for" in worker)
 
 
+# =============================================================================
+# Phase 5 runs right after a reboot, so the AFC open hits a device that is
+# paired/reachable but still at the lock screen: lockdownd answers
+# PasswordProtected and the whole apply used to die there -- AFTER the wipe,
+# with the photos sitting only in the cache. A real iOS 27.0.1 run failed with
+# PasswordRequiredError at AfcService.__aenter__ with no way to retry.
+def test_afc_open_retry():
+    print("\nAFC open waits out a locked device (PasswordProtected)")
+    import pymobiledevice3.exceptions as pm3_exc
+    LOCKED = pm3_exc.PasswordRequiredError("PasswordProtected", "UDID", "27.0.1")
+    DROPPED = pm3_exc.ConnectionTerminatedError("connection terminated")
+
+    class FakeAfc:
+        """An AfcService whose connect fails `fail_times` times, then works."""
+
+        def __init__(self, fail_times=0, exc=None):
+            self.fail_times = fail_times
+            self.exc = exc
+            self.closed = 0
+
+        async def __aenter__(self):
+            if self.fail_times > 0:
+                self.fail_times -= 1
+                raise self.exc
+            return self
+
+        async def __aexit__(self, *_exc):
+            self.closed += 1
+            return False
+
+    made = []
+
+    def install(factory):
+        """Patch AfcService; `factory()` makes one service per attempt."""
+        made.clear()
+
+        def fake_service(_client):
+            inst = factory()
+            made.append(inst)
+            return inst
+        afc_media.AfcService = fake_service
+
+    def fails_once(exc):
+        """Locked for the first attempt only -- the wait then succeeds."""
+        state = {"n": 0}
+
+        def factory():
+            state["n"] += 1
+            return FakeAfc(fail_times=1 if state["n"] == 1 else 0, exc=exc)
+        return factory
+
+    def always_fails(exc):
+        return lambda: FakeAfc(fail_times=1, exc=exc)
+
+    real_sleep, real_monotonic = asyncio.sleep, time.monotonic
+
+    async def no_sleep(_):
+        await real_sleep(0)
+
+    ticks = {"t": 0}
+
+    def fake_clock():
+        ticks["t"] += 1
+        return ticks["t"]
+
+    try:
+        afc_media.asyncio.sleep = no_sleep
+        afc_media.time.monotonic = fake_clock
+
+        # --- 1. a locked device is waited out, then the body runs once ------
+        install(fails_once(LOCKED))
+        labels, body = [], []
+
+        async def run():
+            async with afc_media.open_afc_for_media(
+                    object(), progress_callback=labels.append) as svc:
+                body.append(svc)
+        asyncio.run(run())
+
+        check("a locked device is retried, not fatal", len(made) == 2,
+              f"{len(made)} attempts")
+        check("the push body runs exactly once", len(body) == 1)
+        check("the service is the one __aenter__ returned", body[0] is made[-1])
+        check("the service is closed afterwards", made[-1].closed == 1)
+        check("the user is told to unlock the device",
+              any("unlock" in str(m).lower() for m in labels),
+              str(labels[0])[:44])
+
+        # --- 2. a dropped connection is retried too -------------------------
+        install(fails_once(DROPPED))
+
+        async def run_dropped():
+            async with afc_media.open_afc_for_media(object()) as svc:
+                return "ok"
+        check("a dropped connection is retried, not fatal",
+              asyncio.run(run_dropped()) == "ok")
+
+        # --- 3. a real rejection is NOT retried ----------------------------
+        install(always_fails(RuntimeError("no such service")))
+
+        async def run_bad():
+            async with afc_media.open_afc_for_media(object(), timeout=60):
+                raise AssertionError("body must not run")
+        try:
+            asyncio.run(run_bad())
+            check("a real rejection raises at once", False, "no exception")
+        except RuntimeError as e:
+            check("a real rejection raises at once", "no such service" in str(e))
+            check("a real rejection is not retried", len(made) == 1,
+                  f"{len(made)} attempts")
+
+        # --- 4. budget spent with no prompt => raise (photos may be the only copy)
+        ticks["t"] = 0
+        install(always_fails(LOCKED))
+        ran = []
+
+        async def run_exhausted():
+            async with afc_media.open_afc_for_media(object(), timeout=0) as svc:
+                ran.append(svc)
+        try:
+            asyncio.run(run_exhausted())
+            check("an exhausted wait RAISES", False, "no exception")
+        except NuggetException as e:
+            check("an exhausted wait RAISES", True)
+            check("it says the device stayed locked",
+                  "locked" in str(e).lower(), str(e)[:46])
+        check("an exhausted wait never pushes anything", not ran)
+        check("without a prompt the wait is not stretched forever",
+              len(made) == 1, f"{len(made)} attempts")
+
+        # --- 5. Abort ends it, Resume restarts the cycle --------------------
+        ticks["t"] = 0
+        seen = []
+
+        def prompt_abort(title, text):
+            seen.append((title, text))
+            return "abort"
+        install(always_fails(LOCKED))
+
+        async def run_abort():
+            async with afc_media.open_afc_for_media(
+                    object(), prompt_choice=prompt_abort,
+                    unlock_prompt=("T", "unlock it"), timeout=0) as svc:
+                raise AssertionError("body must not run")
+        try:
+            asyncio.run(run_abort())
+            check("Abort stops the restore", False, "no exception")
+        except NuggetException:
+            check("Abort stops the restore", True)
+        check("Abort shows the prompt once", len(seen) == 1, f"{len(seen)} prompts")
+        check("the prompt carries a title and user-facing text",
+              seen[0][0] == "T" and "unlock" in seen[0][1])
+
+        ticks["t"] = 0
+        seen.clear()
+        state = {"n": 0}
+
+        def factory():
+            # locked for the whole first cycle, healthy once the user resumes
+            state["n"] += 1
+            return FakeAfc(fail_times=1 if state["n"] == 1 else 0, exc=LOCKED)
+        install(factory)
+
+        def prompt_resume(title, text):
+            seen.append((title, text))
+            return "resume"
+
+        async def run_resume():
+            async with afc_media.open_afc_for_media(
+                    object(), prompt_choice=prompt_resume,
+                    unlock_prompt=("T", "unlock it"), timeout=0) as svc:
+                return svc
+        got = asyncio.run(run_resume())
+        check("Resume restarts the wait and the push then runs",
+              got is not None and got is made[-1])
+        check("Resume was asked exactly once", len(seen) == 1, f"{len(seen)} prompts")
+    finally:
+        afc_media.asyncio.sleep = real_sleep
+        afc_media.time.monotonic = real_monotonic
+        afc_media.AfcService = _REAL_AFC_SERVICE
+
+    check("the real AfcService is restored",
+          afc_media.AfcService is _REAL_AFC_SERVICE)
+
+
+
 def main():
     test_marker_gate()
     test_pull()
@@ -389,6 +582,7 @@ def main():
     test_push()
     test_pre_apply_gate()
     test_restore_call_sites()
+    test_afc_open_retry()
     shutil.rmtree(TMP, ignore_errors=True)
     print(f"\nALL {PASS} CHECKS PASSED")
 

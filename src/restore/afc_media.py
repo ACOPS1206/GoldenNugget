@@ -31,13 +31,19 @@ Design rules:
   the Media tree and would duplicate content.
 """
 
+import asyncio
 import json
 import os
 import posixpath
 import time
+from contextlib import asynccontextmanager
 
 from pymobiledevice3.services.afc import MAXIMUM_READ_SIZE, AfcService
 
+from src.exceptions.device_errors import (
+    is_connection_error,
+    is_device_lock_required_error,
+)
 from src.exceptions.nugget_exception import NuggetException
 from src.utils.log_util import log_info, log_warn, log_error
 
@@ -471,14 +477,119 @@ async def _push_one(afc, src: str, remote_rel: str) -> int:
         await afc.fclose(handle)
 
 
+# Phase 5 runs right after a reboot, and lockdownd answers StartService with
+# PasswordProtected until the device is unlocked. A *paired* lockdown session
+# is established happily while the device still sits at the lock screen, so
+# _wait_for_device() returning is NOT evidence that services will start -- the
+# first AFC open routinely fails on a device that is not actually broken. The
+# media store is the only copy of the user's photos at that point, so give them
+# a real window to unlock instead of failing the apply on a locked screen.
+_AFC_OPEN_TIMEOUT = 5 * 60
+_AFC_OPEN_INITIAL_DELAY = 2.0
+_AFC_OPEN_MAX_DELAY = 15.0
+# Pure safety net so the wait loop is finite by construction, no matter what
+# the clock does. The real budget is the timeout above (~30 attempts at the
+# capped delay), so this never fires in practice -- it only stops a runaway
+# loop on a hostile/broken timing condition.
+_AFC_OPEN_MAX_ATTEMPTS = 400
+
+
+@asynccontextmanager
+async def open_afc_for_media(lockdown_client, progress_callback=None,
+                             prompt_choice=None, unlock_prompt=None,
+                             timeout: float = _AFC_OPEN_TIMEOUT):
+    """Open the AFC service, waiting out a locked device.
+
+    Only the *connect* is retried. Once the service is up the caller's body
+    runs exactly once, so a failure halfway through a push is never silently
+    re-run (that would risk re-writing files the device already has).
+
+    ``prompt_choice``/``unlock_prompt`` are the Abort/Resume escape hatch used
+    once the wait budget is spent, mirroring ``_wait_for_device``. They are
+    passed in (title, text) rather than built here so this module stays
+    importable without Qt -- the offline AFC tests run on a bare interpreter.
+    """
+    def _log(value):
+        if progress_callback is not None and not isinstance(value, (int, float)):
+            progress_callback(value)
+
+    while True:
+        start = time.monotonic()
+        deadline = start + timeout
+        delay = _AFC_OPEN_INITIAL_DELAY
+        last_error = None
+        announced = False
+        attempt = 0
+        while True:
+            attempt += 1
+            afc = AfcService(lockdown_client)
+            try:
+                # __aenter__ is connect() and nothing else, and a failed
+                # connect leaves the service object with no open channel
+                # (upstream resets its in-flight state so the next attempt
+                # starts clean). The lockdown session itself stays valid, which
+                # is why no reconnect is needed here.
+                service = await afc.__aenter__()
+            except Exception as e:
+                locked = is_device_lock_required_error(e)
+                if not (locked or is_connection_error(e)):
+                    # a real rejection (bad service name, protocol error) --
+                    # retrying would just burn the wait
+                    raise
+                last_error = e
+                if locked and not announced:
+                    announced = True
+                    log_warn("AFC media restore: the device is locked - waiting "
+                             "for it to be unlocked")
+                    _log("Waiting for the device to be unlocked to restore your photos...")
+                elif not locked:
+                    log_warn(f"AFC media restore: {type(e).__name__}: {e} - retrying")
+                if (time.monotonic() + delay > deadline
+                        or attempt >= _AFC_OPEN_MAX_ATTEMPTS):
+                    break
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, _AFC_OPEN_MAX_DELAY)
+                continue
+            try:
+                yield service
+            finally:
+                await afc.__aexit__(None, None, None)
+            return
+
+        # wait budget spent: offer Abort/Resume instead of killing the restore
+        err = NuggetException(
+            f"Could not open the AFC service for the photo restore within "
+            f"{int(timeout // 60)} min - the device stayed locked or "
+            f"unreachable. Last error: {last_error}"
+        )
+        if prompt_choice is None or unlock_prompt is None:
+            raise err from last_error
+        title, text = unlock_prompt
+        log_info("AFC media wait timed out; asking the user whether to resume or abort")
+        try:
+            decision = prompt_choice(title, text)
+        except Exception as e:
+            log_warn(f"AFC media prompt failed ({e}) - aborting")
+            raise err from last_error
+        if decision != "resume":
+            raise err from last_error
+        log_info("User chose to resume - restarting the AFC media wait cycle")
+
+
 async def restore_media_via_afc(lockdown_client, media_root: str,
                                 progress_callback=None,
-                                on_error: str = "raise") -> dict:
+                                on_error: str = "raise",
+                                prompt_choice=None,
+                                unlock_prompt=None) -> dict:
     """Push a previously pulled Media tree back to the device over AFC.
 
     Mirrors ``media_root`` (which holds the AFC root layout: DCIM/, PhotoData/,
     ...) back onto the device after the iOS 27 security-recovery wipe. Returns
     a tally dict ``{"files": int, "bytes": int}``.
+
+    The device has just rebooted, so the AFC open waits out a locked screen
+    first (see ``open_afc_for_media``) -- pass ``prompt_choice`` to get the
+    Abort/Resume prompt if that wait runs out.
     """
     root = os.path.abspath(media_root)
     if not os.path.isdir(root):
@@ -502,7 +613,9 @@ async def restore_media_via_afc(lockdown_client, media_root: str,
             entries.append((src, rel))
             total_bytes += os.path.getsize(src)
 
-    async with AfcService(lockdown_client) as afc:
+    async with open_afc_for_media(lockdown_client, progress_callback=_log,
+                                  prompt_choice=prompt_choice,
+                                  unlock_prompt=unlock_prompt) as afc:
         done_files = 0
         done_bytes = 0
         failed: list[str] = []

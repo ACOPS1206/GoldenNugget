@@ -22,6 +22,22 @@ def is_connection_error(exc: Exception) -> bool:
     )) or "connection" in msg or "incomplete" in msg or "terminated" in msg
 
 
+def is_device_lock_required_error(exc: Exception) -> bool:
+    """True when lockdown refused to start a service because the device is locked.
+
+    Distinct from :func:`is_device_locked_error`, which sniffs the
+    mobilebackup2 "ErrorCode 208" text. A *paired* lockdown session can be
+    established while the device still sits at the lock screen, so
+    ``StartService`` answers ``PasswordProtected`` even though nothing is
+    actually wrong: the device just has to be unlocked. That makes it a
+    wait-and-retry condition, not a failure.
+    """
+    if isinstance(exc, (pm3_exc.PasswordRequiredError, pm3_exc.PasscodeRequiredError)):
+        return True
+    msg = str(exc)
+    return "PasswordProtected" in msg or "PasscodeRequired" in msg
+
+
 def is_transient_restore_error(error) -> bool:
     """True for Phase 3 errors that mean 'device still booting, try again'."""
     name = type(error).__name__
