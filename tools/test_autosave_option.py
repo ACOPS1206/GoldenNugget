@@ -195,11 +195,100 @@ def test_banner_and_settings_hook():
           "pref_manager.tweak_autosave = tweak_autosave" in loader)
 
 
+def test_status_bar_survives_the_round_trip():
+    """AutoSave must carry the status bar overrides, not just its enabled flag.
+
+    StatusBarTweak is serialised as a base64 blob of the whole classic
+    ``StatusBarOverrideData`` struct (there is no key/value form for it), so
+    nothing about "the status bar is in the preset" is visible in the code
+    path -- it only holds if the blob really round-trips. The iOS 27 archive
+    path then reads those same fields back through
+    ``get_carrier_override``/``get_primary_service_badge_override``/
+    ``get_gsm_signal_strength_bars_override``, so a regression here silently
+    blanks the carrier name, badge and bar count on iOS 27 while every other
+    tweak keeps saving fine.
+    """
+    from src.controllers.preset_manager import PresetManager
+
+    pm = PresetManager()
+    pm._load_all_tweaks()
+    from src.tweaks.tweak_loader import tweaks
+    from src.tweaks.tweak_names import TweakID
+
+    check("StatusBar is in the tweak registry", TweakID.StatusBar in tweaks)
+    tweak = tweaks[TweakID.StatusBar]
+
+    # Drive it exactly like the page does, so the saved blob is a real one.
+    tweak.enabled = True
+    tweak.set_carrier_override("Mango")
+    tweak.set_primary_service_badge("P")
+    tweak.set_gsm_signal_strength_bars(3)
+
+    payload = pm._serialize_tweak(tweak)
+    check("it is serialised as a status bar tweak",
+          payload.get("type") == "StatusBarTweak", payload.get("type"))
+    check("the override blob is present", bool(payload.get("override_data")))
+    check("the enabled flag is saved", payload.get("enabled") is True)
+    check("silly_mode is saved", "silly_mode" in payload)
+
+    # A fresh instance, restored only from the serialised payload.
+    from src.tweaks.status_bar.status_bar_tweak import StatusBarTweak
+    fresh = StatusBarTweak()
+    pm._apply_status_bar(fresh, payload)
+    check("carrier survives", fresh.get_carrier_override() == "Mango",
+          fresh.get_carrier_override())
+    check("service badge survives",
+          fresh.get_primary_service_badge_override() == "P",
+          fresh.get_primary_service_badge_override())
+    check("signal bars survive",
+          fresh.get_gsm_signal_strength_bars_override() == 3,
+          fresh.get_gsm_signal_strength_bars_override())
+    check("enabled survives", fresh.enabled is True)
+
+    # The whole point on iOS 27: those three restored fields must be what the
+    # archive writer actually consumes, badge and bars included.
+    from src.tweaks.status_bar.statusbar_archive import carrier_overrides
+    staged: list = []
+    fresh.apply_ios27_tweak(staged)
+    check("one file staged", len(staged) == 1, len(staged))
+    got = carrier_overrides(staged[0].contents)
+    check("the restored values reach the iOS 27 archive",
+          got["primary"] == ("Mango", "P", 3), got["primary"])
+
+    # Clearing the overrides must collapse to the reset record again, i.e. the
+    # blob really is cleared rather than a stale struct being kept around.
+    for unset in (fresh.unset_carrier_override,
+                  fresh.unset_primary_service_badge,
+                  fresh.unset_gsm_signal_strength_bars):
+        unset()
+    staged = []
+    fresh.apply_ios27_tweak(staged)
+    check("unset overrides -> reset record",
+          carrier_overrides(staged[0].contents)["primary"] is None,
+          carrier_overrides(staged[0].contents)["primary"])
+
+    # And a whole preset written through save_preset must contain the tweak.
+    name = "ZZTempAutoSaveStatusBar"
+    try:
+        check("save_preset writes it", pm.save_preset(name, "temp", tags=["test"]))
+        import json
+        on_disk = json.load(open(pm.get_preset_path(name), encoding="utf-8"))
+        check("the preset file has a StatusBar entry",
+              "StatusBar" in on_disk.get("tweaks", {}))
+        check("and it carries the override blob",
+              bool(on_disk["tweaks"]["StatusBar"].get("override_data")))
+    finally:
+        path = pm.get_preset_path(name)
+        if os.path.exists(path):
+            os.remove(path)
+
+
 def main():
     test_option_state()
     test_writes_are_gated()
     test_startup_load()
     test_banner_and_settings_hook()
+    test_status_bar_survives_the_round_trip()
     print(f"\nALL {PASS} CHECKS PASSED")
 
 
