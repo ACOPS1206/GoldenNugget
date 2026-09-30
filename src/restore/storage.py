@@ -77,6 +77,11 @@ def posterboard_dir() -> Path:
     return _configured_root() / "PosterBoard"
 
 
+def statusbar_dir() -> Path:
+    """Folder holding StatusBarOverrides.archive dumps (per UDID, research)."""
+    return _configured_root() / "StatusBar"
+
+
 def legacy_backups_dir() -> Path:
     """Folder holding legacy full-device backups (PosterBoard fallback)."""
     return _configured_root() / "Backups"
