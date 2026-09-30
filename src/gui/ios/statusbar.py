@@ -13,8 +13,10 @@ from src.gui.theme import ColorThemeManager
 from src.tweaks.tweaks import tweaks, TweakID
 from src.tweaks.status_bar.status_setter import StatusBarItem
 
-# iOS 27 dropped the classic statusBarOverrides struct: only the carrier name
-# survives, through StatusBarOverrides.archive. Everything else has no
+# iOS 27 dropped the classic statusBarOverrides struct: only the cellular
+# entry survives, through StatusBarOverrides.archive, and that entry carries
+# the carrier name, its service badge and its signal-bar count. Everything
+# else (time, date, battery, wifi, and the per-item show/hide toggles) has no
 # representation there, so it is hidden rather than shown as a switch that
 # silently does nothing. See src/tweaks/status_bar/statusbar_archive.py.
 FIRST_ARCHIVE_VERSION = "27.0"
@@ -94,6 +96,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.is_primary_service_badge_overridden(),
             self.status_manager.get_primary_service_badge_override(),
             self.status_manager.set_primary_service_badge, self.status_manager.unset_primary_service_badge,
+            survives_ios27=True,
         )
         self.secondary_carrier_row = self._make_text_row(
             QCoreApplication.translate("Nugget", "Secondary Carrier Name"),
@@ -107,6 +110,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.is_secondary_service_badge_overridden(),
             self.status_manager.get_secondary_service_badge_override(),
             self.status_manager.set_secondary_service_badge, self.status_manager.unset_secondary_service_badge,
+            survives_ios27=True,
         )
 
         # Number rows
@@ -117,6 +121,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.get_gsm_signal_strength_bars_override(),
             self.status_manager.set_gsm_signal_strength_bars, self.status_manager.unset_gsm_signal_strength_bars,
             0, 5,
+            survives_ios27=True,
         )
         self.secondary_gsm_row = self._make_number_row(
             QCoreApplication.translate("Nugget", "Secondary Cellular Signal Bars"),
@@ -124,6 +129,7 @@ class IOSStatusBarPage(QWidget):
             self.status_manager.get_secondary_gsm_signal_strength_bars_override(),
             self.status_manager.set_secondary_gsm_signal_strength_bars, self.status_manager.unset_secondary_gsm_signal_strength_bars,
             0, 5,
+            survives_ios27=True,
         )
         self.wifi_row = self._make_number_row(
             QCoreApplication.translate("Nugget", "Change Wi-Fi Signal Strength"),
@@ -205,7 +211,9 @@ class IOSStatusBarPage(QWidget):
         self._ios27_note = QLabel(QCoreApplication.translate(
             "Nugget",
             "iOS 27 replaced the status bar override file, so only the carrier "
-            "name can be changed here. The other options need iOS 26 or lower."
+            "entry can be changed here: its name, service badge and signal bars. "
+            "The badge and bars apply to the carrier name, so set one first. "
+            "The other options need iOS 26 or lower."
         ))
         self._ios27_note.setWordWrap(True)
         self.content_layout.addWidget(self._ios27_note)

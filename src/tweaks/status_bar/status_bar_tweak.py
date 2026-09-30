@@ -19,22 +19,36 @@ class StatusBarTweak(Tweak):
 
     # iOS 27+: the classic binary statusBarOverrides file is no longer read and
     # the SpeakeasyNewStatusBar feature flag cannot be written by a restore, so
-    # the carrier name is delivered as the StatusBarOverrides.archive that
-    # SpringBoard unarchives itself. It lives in HomeDomain, the same domain
-    # the classic path uses, so this is an ordinary restore file -- no exploit.
+    # the carrier overrides are delivered as the StatusBarOverrides.archive
+    # that SpringBoard unarchives itself. It lives in HomeDomain, the same
+    # domain the classic path uses, so this is an ordinary restore file -- no
+    # exploit.
     def apply_ios27_tweak(self, files_to_restore: list) -> None:
         """Stage StatusBarOverrides.archive (iOS 27+).
 
-        Only the carrier names survive on iOS 27; every other override in the
-        struct has no representation in the archive and is dropped, so the page
-        hides them (see src/gui/ios/statusbar.py).
+        The cellular entry carries the carrier name, its service badge and
+        its signal-bar count, so those four overrides survive. The classic
+        time/date/battery/wifi overrides and the per-item show/hide toggles
+        have no counterpart in the archive and are dropped, so the page hides
+        them (see src/gui/ios/statusbar.py).
         """
         if not self.enabled:
             return
         primary = self.get_carrier_override() if self.is_carrier_overridden() else None
         secondary = self.get_secondary_carrier_override() if self.is_secondary_carrier_overridden() else None
+        badge = self.get_primary_service_badge_override() if self.is_primary_service_badge_overridden() else None
+        secondary_badge = self.get_secondary_service_badge_override() if self.is_secondary_service_badge_overridden() else None
+        bars = self.get_gsm_signal_strength_bars_override() if self.is_gsm_signal_strength_bars_overridden() else None
+        secondary_bars = self.get_secondary_gsm_signal_strength_bars_override() if self.is_secondary_gsm_signal_strength_bars_overridden() else None
         files_to_restore.append(FileToRestore(
-            contents=build_archive(primary, secondary),
+            contents=build_archive(
+                primary,
+                secondary,
+                badge,
+                secondary_badge,
+                bars,
+                secondary_bars,
+            ),
             restore_path=ARCHIVE_PATH,
             domain=ARCHIVE_DOMAIN
         ))
