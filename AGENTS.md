@@ -423,6 +423,25 @@ backup in the persistent app-data store
   - **Never** write a zero-byte plist on iOS 26.2+: a truncated
     `com.apple.springboard.plist` crashes SpringBoard at boot and sends the
     device into a boot loop. An empty dict parses and falls back to defaults.
+- **Managed-pref tweaks live in TWO files.** mcxd copies every managed
+  preference into the target app's own cfprefs domain on disk, so an applied
+  tweak is visible both in `/var/Managed Preferences/mobile/<domain>.plist`
+  (which Nugget owns) and in
+  `/var/mobile/Library/Preferences/<domain>.plist` (where the merged value
+  stays behind as an ordinary preference once the managed entry is gone).
+  Emptying only the managed file therefore left the value in the mirror,
+  where nothing manages it any more — this is what kept the Dynamic Island
+  hidden after a reset. Two rules follow, both driven by
+  `managed_pref_app_plists()` / `managed_pref_target()` in
+  `src/tweaks/registry.py` (add a managed-pref target to the registry and
+  both rules follow automatically):
+  - the reset writes the mirror too (`{}` on iOS 27+, owner 501) — never a
+    zero-byte app plist, that is the boot-loop input above;
+  - the mirrors are excluded from the protective backup
+    (`_SKIP_APP_PREF_FILES` in `src/restore/protective.py`), because Phase 3
+    restores that scope AFTER the sparse reset and handed the stale value
+    straight back. Same reasoning as `statusBarOverrides` /
+    `.GlobalPreferences.plist`.
 
 ## Restore Module (src/restore/)
 

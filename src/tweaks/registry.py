@@ -600,3 +600,44 @@ SPECS: tuple[TweakSpec, ...] = (
 
 SPECS_BY_SECTION = {section: [s for s in SPECS if s.section == section and not s.disabled] for section in Section}
 SPECS_BY_ID = {spec.id: spec for spec in SPECS if not spec.disabled}
+
+
+MANAGED_PREF_PREFIX = "/var/Managed Preferences/"
+HOME_PREFIX = "/var/mobile/"
+
+
+def managed_pref_target(path: str) -> Optional[str]:
+    """HomeDomain path of the app plist a managed-preference file mirrors into.
+
+    ``/var/Managed Preferences/mobile/com.apple.springboard.plist`` ->
+    ``Library/Preferences/com.apple.springboard.plist``. Returns None for any
+    other location.
+    """
+    if not path.startswith(MANAGED_PREF_PREFIX):
+        return None
+    name = path[len(MANAGED_PREF_PREFIX):]
+    if name.startswith("mobile/"):
+        name = name[len("mobile/"):]
+    if not name.endswith(".plist"):
+        return None
+    return f"Library/Preferences/{name}"
+
+
+def managed_pref_app_plists() -> frozenset:
+    """HomeDomain-relative app plists that carry the managed-preference tweaks.
+
+    mcxd copies every managed preference into the target app's own cfprefs
+    domain on disk, so a managed-pref tweak lives in TWO places: the
+    ``/var/Managed Preferences`` file Nugget owns, and the app plist where the
+    merged value stays behind as an ordinary preference once the managed
+    entry is gone. Anything that must not resurrect a tweak — the protective
+    backup keep-set (Phase 3 restores it after the sparse reset) or the reset
+    itself — derives its exclusion list from here, so adding a
+    managed-pref target to the registry is enough.
+    """
+    out = set()
+    for spec in SPECS:
+        target = managed_pref_target(spec.location.value)
+        if target is not None:
+            out.add(target)
+    return frozenset(out)

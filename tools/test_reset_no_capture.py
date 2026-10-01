@@ -162,6 +162,41 @@ def test_ios26_keeps_zero_byte_files():
               fake.written.get(path) == b"", repr(fake.written.get(path)))
 
 
+SPRINGBOARD_MIRROR = "/var/mobile/Library/Preferences/com.apple.springboard.plist"
+UIKIT_MIRROR = "/var/mobile/Library/Preferences/com.apple.UIKit.plist"
+
+
+def test_ios27_clears_managed_pref_mirrors():
+    print("\niOS 27 reset: clears the app-domain managed-pref mirrors too")
+    # mcxd merges each managed preference into the target app's own cfprefs
+    # domain, so the stale value survives in Library/Preferences/<domain>.plist
+    # after the managed entry is emptied -- and Phase 3 used to restore that
+    # mirror, which is what kept the Dynamic Island hidden after a reset.
+    fake, errors, _ = run_reset("27.0", [Page.Springboard, Page.InternalOptions])
+    check("no exception escaped the reset", not errors, repr(errors[:1]))
+    for path in (SPRINGBOARD_MIRROR, UIKIT_MIRROR):
+        data = fake.written.get(path)
+        check(f"{path} is written", data is not None)
+        parsed = None
+        if data is not None:
+            try:
+                parsed = plistlib.loads(data)
+            except Exception as e:
+                parsed = f"unparseable: {e}"
+        check(f"{path} is a valid empty plist", parsed == {}, repr(parsed))
+        check(f"{path} is not a zero-byte app plist", data not in (b"", None),
+              f"{len(data) if data else 0} bytes")
+
+
+def test_ios26_leaves_app_mirrors_alone():
+    print("\niOS 26 reset: app-domain mirrors untouched (no Phase 3 to undo)")
+    fake, errors, _ = run_reset("26.2", [Page.Springboard])
+    check("no exception escaped the reset", not errors, repr(errors[:1]))
+    check("no app-domain springboard/uikit mirror written",
+          SPRINGBOARD_MIRROR not in fake.written and UIKIT_MIRROR not in fake.written,
+          repr(sorted(fake.written)))
+
+
 def test_ios26_daemons_page_still_written():
     print("\niOS 26/27 Daemons page: real values, not nulled")
     for version in ("26.2", "27.0"):
@@ -212,6 +247,8 @@ def test_ios26_status_bar_still_resets_the_classic_file():
 test_capture_is_gone()
 test_ios27_writes_valid_empty_plists()
 test_ios26_keeps_zero_byte_files()
+test_ios27_clears_managed_pref_mirrors()
+test_ios26_leaves_app_mirrors_alone()
 test_ios26_daemons_page_still_written()
 test_ios27_status_bar_resets_the_archive()
 test_ios26_status_bar_still_resets_the_classic_file()

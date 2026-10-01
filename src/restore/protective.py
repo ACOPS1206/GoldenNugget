@@ -67,6 +67,7 @@ from src.restore.protective_cache import (  # noqa: F401  (re-exported public AP
     CACHE_REFRESH_SECS,
     ProtectiveBackupCache,
 )
+from src.tweaks.registry import managed_pref_app_plists
 
 
 @dataclass
@@ -291,6 +292,15 @@ _SKIP_PATH_PREFIXES = (
     "Library/SpringBoard/statusBarOverrides",  # Not captured stale; re-injected with fresh tweak content
 )
 
+# App-domain mirrors of the managed-preference targets (mcxd copies each
+# managed preference into the target app's own cfprefs domain on disk, so
+# "the tweak is applied" is visible in BOTH files). Phase 3 restores this
+# scope AFTER the sparse restore that clears the managed entry, which
+# resurrects the stale value with nothing left to manage it — the reset looks
+# like it did nothing. Same class of problem as statusBarOverrides above, so
+# they are kept out of the backup entirely; the apply/reset owns both copies.
+_SKIP_APP_PREF_FILES = managed_pref_app_plists()
+
 # Files iOS manages internally and rejects if included in a sparse backup
 # with incorrect metadata (e.g. wrong protection class). With copy=True the
 # existing on-device data is preserved anyway, so skipping them is safe.
@@ -324,6 +334,8 @@ def _is_protective_file(domain: str, relative_path: str, include_photos: bool = 
         return False
     if domain == "HomeDomain":
         if relative_path.startswith(_SKIP_PATH_PREFIXES):
+            return False
+        if relative_path in _SKIP_APP_PREF_FILES:
             return False
         return (relative_path.startswith(APPLE_ID_PATH_PREFIXES)
                 or relative_path.startswith(SPRINGBOARD_PATH_PREFIXES)

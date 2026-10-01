@@ -49,6 +49,7 @@ from src.tweaks.posterboard.posterboard_tweak import PosterboardTweak
 from src.tweaks.posterboard.template_options.templates_tweak import TemplatesTweak
 from src.tweaks.icon_themes.icon_themes_tweak import IconThemesTweak
 from src.tweaks.basic_plist_locations import FileLocation
+from src.tweaks.registry import HOME_PREFIX, managed_pref_target
 
 from src.restore.restore import restore_files, FileToRestore
 from src.restore.afc_media import (
@@ -1197,8 +1198,9 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                     files_to_null.append(FileLocation.notes.value)
 
             # add the files to null from the list
+            is_ios27 = bool(dev_version) and Version(dev_version) >= Version("27.0")
             for file_path in files_to_null:
-                if dev_version and Version(dev_version) >= Version("27.0"):
+                if is_ios27:
                     # Restore a valid empty plist instead of a zero-byte
                     # file: on iOS 26.2+ a truncated plist (e.g. an empty
                     # com.apple.springboard.plist) makes SpringBoard crash
@@ -1215,6 +1217,25 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                     path=file_path,
                     files_to_restore=files_to_restore
                 )
+                # mcxd copies every managed preference into the target app's
+                # own cfprefs domain on disk, so an applied tweak is visible in
+                # TWO files: the /var/Managed Preferences plist Nugget owns and
+                # Library/Preferences/<domain>.plist. Emptying only the first
+                # leaves the merged value in the mirror, where nothing manages
+                # it any more -- and the Phase 3 protective restore used to
+                # hand that stale mirror straight back (this is what kept the
+                # Dynamic Island hidden after a reset). Clear both copies.
+                # iOS 27 only: on 26 the reset is a single sparse restore with
+                # no protective restore to undo it, and a zero-byte app plist
+                # is exactly the boot-loop input the branch above avoids.
+                app_pref = managed_pref_target(file_path)
+                if app_pref is not None and is_ios27:
+                    self.concat_file(
+                        contents=contents,
+                        path=f"{HOME_PREFIX}{app_pref}",
+                        files_to_restore=files_to_restore,
+                        owner=501, group=501
+                    )
 
             await self.add_skip_setup(files_to_restore, uses_domains)
 
