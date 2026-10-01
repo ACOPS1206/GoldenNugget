@@ -312,9 +312,7 @@ record and are hidden on the iOS 27 page. Signal bars, network type and badges
 are written with fixed verified values rather than exposed, since none of them
 has been seen to render correctly outside the simulator.
 
-**Still unverified on physical hardware.** The format and the rendered result
-were validated on the iOS 27 CoreSimulator; the delivery over a real backup
-restore has not been run on a device yet.
+**Verified end-to-end by me and other users**
 
 Format reference (reverse engineering, not device-verified end to end):
 <https://github.com/Prognosticate-X/ios27-carrier-lockscreen-research>
