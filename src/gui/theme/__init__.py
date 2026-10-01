@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize, QRect
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 
 from src.gui.theme.theme_manager import ColorThemeManager
@@ -45,14 +45,17 @@ def theme_pixmap(resource_path: str, color_hex: str, size: int,
     HiDPI screens and sets the pixmap's device pixel ratio accordingly.
     """
     scale = max(1.0, float(dpr))
-    pm = QPixmap(int(round(size * scale)), int(round(size * scale)))
+    logical = int(round(size))
+    phys = int(round(size * scale))
+    pm = QPixmap(phys, phys)
     pm.setDevicePixelRatio(scale)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
-    painter.drawPixmap(pm.rect(), QIcon(resource_path).pixmap(pm.size()))
+    src = QIcon(resource_path).pixmap(QSize(logical, logical))
+    painter.drawPixmap(QRect(0, 0, logical, logical), src)
     painter.setCompositionMode(
         QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(pm.rect(), QColor(color_hex))
+    painter.fillRect(QRect(0, 0, logical, logical), QColor(color_hex))
     painter.end()
     return pm
 
