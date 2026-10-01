@@ -169,6 +169,20 @@ def _pick_donor_blob(conn, domain: str, relative_path: str) -> "Optional[bytes]"
     return None
 
 
+def _owned(value, default: int = 501) -> int:
+    """Resolve a uid/gid for a manifest blob — ``None`` means "unspecified".
+
+    ``owner or 501`` (the original form) silently re-owned every injected file
+    whose owner was 0. That is *not* an unspecified value, it is root: the
+    daemons plist (``/var/db/com.apple.xpc.launchd/disabled.plist``) and the
+    rest of ``DatabaseDomain`` are root-owned in a real backup, and the device
+    ignores a root path restored as mobile-owned (silently — the launchd
+    disabled list simply does not take). Only a genuinely missing value may
+    fall back to the mobile default.
+    """
+    return default if value is None else value
+
+
 def _build_mbdir_blob(relative_path: str, mode: int = 16877) -> bytes:
     """Build an ``MBFile``-style archive blob for a directory row.
 
@@ -210,7 +224,8 @@ def _build_mbdir_blob(relative_path: str, mode: int = 16877) -> bytes:
 
 def _ensure_directory_rows(conn, domain: str, relative_dir: str,
                            next_inode: int = None, known_dirs: set = None,
-                           donor_blob: bytes = None) -> int:
+                           donor_blob: bytes = None,
+                           owner: int = None, group: int = None) -> int:
     """Insert flags=2 directory rows for every missing path component.
 
     The iOS 27 restore agent skips a file whose parent directories have no
@@ -225,6 +240,13 @@ def _ensure_directory_rows(conn, domain: str, relative_dir: str,
     chains skip the SELECT) and ``next_inode`` is an in-memory counter picked
     up where the previous call left it, avoiding a fresh manifest scan per
     file. Returns the current inode counter (one call passes it forward).
+
+    ``owner``/``group`` (when not ``None``) are stamped onto every row written
+    here. A donor dir blob is cloned from whatever directory row the backup
+    happens to have — on a pruned protective backup that is a HomeDomain one,
+    so a new root-owned domain would otherwise inherit mobile ownership on its
+    own directory rows (DatabaseDomain's ``com.apple.xpc.launchd`` is
+    uid 0 / mode 0755 on a real device).
     """
     if donor_blob is None:
         donor = conn.execute(
@@ -264,6 +286,10 @@ def _ensure_directory_rows(conn, domain: str, relative_dir: str,
             blob = plistlib.loads(_build_mbdir_blob(rel))
             objects = blob["$objects"]
         objects[1]["InodeNumber"] = next_inode
+        if owner is not None:
+            objects[1]["UserID"] = owner
+        if group is not None:
+            objects[1]["GroupID"] = group
         blob = plistlib.dumps(blob, fmt=plistlib.FMT_BINARY)
         dir_id = hashlib.sha1(f"{domain}-{rel}".encode("utf-8")).hexdigest()
         conn.execute(
@@ -315,7 +341,10 @@ def inject_files_into_backup(backup_dir: "str | Path", udid: str, files: list,
     regular-file blob with a real, *unique* inode (it deduplicates by inode —
     a clone sharing the donor's inode gets restored with the donor's content,
     and a fresh blob without an inode is skipped outright). The mode is
-    normalized to a regular 0644-style file so the agent accepts the row.
+    normalized to a regular 0644-style file so the agent accepts the row;
+    the uid/gid are written **verbatim** (owner 0 = root is meaningful — the
+    daemons plist lives in root-owned DatabaseDomain), and the parent
+    directory rows inherit the same ownership.
 
     The file ID follows the standard ``SHA1("<domain>-<relativePath>")``
     convention and the payload is placed in the ``<aa>/<fileID>`` layout the
@@ -371,7 +400,8 @@ def inject_files_into_backup(backup_dir: "str | Path", udid: str, files: list,
             # missing, so ensure the whole directory chain first.
             dir_path, _ = os.path.split(relative_path)
             next_inode = _ensure_directory_rows(
-                conn, domain, dir_path, next_inode, known_dirs, dir_donor)
+                conn, domain, dir_path, next_inode, known_dirs, dir_donor,
+                owner=owner, group=group)
 
             # The restore agent validates the blob and deduplicates by inode:
             # pick a donor the agent accepts, then stamp a unique inode so the
@@ -385,14 +415,16 @@ def inject_files_into_backup(backup_dir: "str | Path", udid: str, files: list,
             safe_mode = (mode or 33188) & 0o100777
             if safe_mode & 0o777 == 0:
                 safe_mode |= 0o644
+            # Ownership is carried verbatim: 0 (root) is a real uid, not a
+            # missing value — see _owned().
             if donor is None:
                 blob = _build_mbfile_blob(
                     relative_path, contents,
-                    mode=safe_mode, owner=owner or 501, group=group or 501)
+                    mode=safe_mode, owner=_owned(owner), group=_owned(group))
             else:
                 blob = _patch_donor_blob(
                     donor, relative_path, contents,
-                    mode=safe_mode, owner=owner or 501, group=group or 501)
+                    mode=safe_mode, owner=_owned(owner), group=_owned(group))
             patched = plistlib.loads(blob)
             patched["$objects"][1]["InodeNumber"] = unique_inode
             blob = plistlib.dumps(patched, fmt=plistlib.FMT_BINARY)
