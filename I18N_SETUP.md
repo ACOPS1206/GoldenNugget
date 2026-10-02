@@ -8,17 +8,24 @@ This document explains how to set up crowdsourced translations via the [gNugget-
 gNugget-i18n repo (crowdsourced translations)
        │
        ▼ (push to main / PR merged)
-GitHub Actions: notify-goldennugget-i18n.yml
+GitHub Actions: notify-goldennugget.yml
        │
        ▼ (repository_dispatch)
 GoldenNugget repo: sync-translations.yml
        │
-       ├── Pull translations from gNugget-i18n
-       ├── Merge into .ts files
+       ├── Point the i18n submodule at the upstream tip (detached checkout)
+       ├── Mirror the .ts files into src/qt/translations/
        ├── Compile .qm files (pyside6-lrelease)
+       ├── Sync the /translations list in resources.qrc
        ├── Regenerate resources_rc.py (pyside6-rcc)
        └── Commit and push changes to main
 ```
+
+gNugget-i18n is the single source of truth — its `.ts` files replace the
+copies in `src/qt/translations/` wholesale (no per-string merging), so a
+language dropped upstream disappears here too. The submodule pointer is
+checked out detached rather than merged, because translators regularly
+rebase/amend upstream and the commit recorded here then becomes unreachable.
 
 ## Required Secrets
 
@@ -31,17 +38,31 @@ To manually sync translations:
 
 ```bash
 # From GoldenNugget root
-python scripts/sync_translations.py /path/to/gNugget-i18n src/qt/translations
+git submodule update --remote i18n
+rm -f src/qt/translations/Nugget_*.ts src/qt/translations/Nugget_*.qm
+cp -f i18n/Nugget_*.ts src/qt/translations/
 cd src/qt/translations
 for f in *.ts; do pyside6-lrelease "$f" -qm "${f%.ts}.qm"; done
 cd ..
+# keep the /translations block in resources.qrc in sync with the .qm files,
+# then:
 pyside6-rcc resources.qrc -o resources_rc.py
 ```
+
+`scripts/sync_translations.py` is a standalone helper that merges translations
+message-by-message instead of replacing the files; the workflow does not use it.
+
+The committed `.ts`/`.qm` copies under `src/qt/translations` are **not** just
+build intermediates: PyInstaller ships that folder on disk
+(`--add-data=src/qt:src/qt`) and `Translator._load_app_translations` prefers it
+over the embedded `:/translations` resource, so a stale copy there means stale
+translations in the released app.
 
 ## Automatic Sync
 
 1. **Weekly**: Runs every Sunday 3 AM UTC
 2. **On translation updates**: When gNugget-i18n receives new translations
+   (concurrent runs are serialized by a `concurrency` group)
 
 ## Adding New Languages
 
@@ -51,6 +72,7 @@ pyside6-rcc resources.qrc -o resources_rc.py
    - Detect new language file
    - Copy to src/qt/translations/
    - Compile .qm
+   - Add/remove its entry in the `/translations` block of `resources.qrc`
    - Update resources_rc.py
    - Commit and push to main
 
@@ -85,13 +107,15 @@ Example:
 ## CI/CD Pipeline
 
 The sync runs in this order:
-1. `notify-goldennugget-i18n.yml` (gNugget-i18n repo) → dispatches event
+1. `notify-goldennugget.yml` (gNugget-i18n repo) → dispatches event
 2. `sync-translations.yml` (GoldenNugget repo):
-   - Clones both repos
-   - Merges translations using `scripts/sync_translations.py`
+   - Checks out the gNugget-i18n submodule tip
+   - Replaces `src/qt/translations/*.ts` with the submodule's copies
    - Compiles `.ts` → `.qm` with `pyside6-lrelease`
+   - Regenerates the `/translations` file list in `resources.qrc`
    - Regenerates `resources_rc.py` with `pyside6-rcc`
-   - Commits and pushes changes directly to `main`
+   - Commits `i18n`, `src/qt/resources.qrc`, `src/qt/resources_rc.py` and
+     `src/qt/translations/`, then rebases and pushes directly to `main`
 3. Changes land on `main` immediately (no PR step)
 
 ## Testing Translations
