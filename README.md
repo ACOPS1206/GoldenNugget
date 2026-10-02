@@ -13,7 +13,7 @@ Make sure you have installed the [requirements](#requirements) if you are on Win
 > [!WARNING]
 >  **I AM NOT RESPONSIBLE IN ANY DATA LOSS OR BOOTLOOPS, IF SOMETHING GOES OFF ITS YOUR FAULT**
 ## Discord server
-Wanted support? join our [Discord Server][server].
+Wanted support? Join our [Discord Server][server].
 
 ## Features
 <details>
