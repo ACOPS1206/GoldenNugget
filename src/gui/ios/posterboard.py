@@ -620,7 +620,7 @@ class IOSPosterboardPage(QWidget):
         version = self.window.device_manager.get_current_device_version()
         try:
             parsed_version = Version(version)
-            is_ios26 = Version("26.2") <= parsed_version < Version("27.0")
+            is_ios26 = Version("26.0") <= parsed_version < Version("27.0")
         except Exception:
             is_ios26 = False
         if not is_ios26:

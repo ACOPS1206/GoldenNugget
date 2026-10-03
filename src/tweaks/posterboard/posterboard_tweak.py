@@ -455,10 +455,10 @@ class PosterboardTweak(Tweak):
                                version, update_label):
         """Add only validated original PosterBoard descriptor files to the restore."""
         device_version = Version(version)
-        if not (Version("26.2") <= device_version < Version("27.0")):
+        if not (Version("26.0") <= device_version < Version("27.0")):
             raise NuggetException(
                 "Raw PosterBoard descriptor restore is limited to "
-                "supported iOS 26 versions (26.2 or newer).")
+                "supported iOS 26 versions (26.0 or newer).")
 
         posterboard_templates = [
             template for template in templates
