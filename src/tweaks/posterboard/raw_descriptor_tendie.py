@@ -19,7 +19,8 @@ from src.utils.file_to_restore import FileToRestore
 
 COLLECTIONS_PROVIDER = "com.apple.WallpaperKit.CollectionsPoster"
 MERCURY_PROVIDER = "com.apple.MercuryPoster"
-ALLOWED_PROVIDERS = {COLLECTIONS_PROVIDER, MERCURY_PROVIDER}
+PHOTOS_PROVIDER = "com.apple.PhotosUIPrivate.PhotosPosterProvider"
+ALLOWED_PROVIDERS = {COLLECTIONS_PROVIDER, MERCURY_PROVIDER, PHOTOS_PROVIDER}
 RAW_STRUCTURE_VERSION = 61
 _DESCRIPTOR_ROOTS = {"descriptor", "descriptors"}
 _SUGGESTION_METADATA = (

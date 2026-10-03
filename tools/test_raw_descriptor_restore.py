@@ -9,7 +9,7 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.tweaks.posterboard.raw_descriptor_tendie import (
-    COLLECTIONS_PROVIDER, MERCURY_PROVIDER, RawDescriptorTendie,
+    COLLECTIONS_PROVIDER, MERCURY_PROVIDER, PHOTOS_PROVIDER, RawDescriptorTendie,
 )
 from src.tweaks.posterboard.exact_configuration_tendie import ExactConfigurationTendie
 
@@ -71,31 +71,49 @@ with tempfile.TemporaryDirectory() as tmp:
     assert all(f"/{MERCURY_PROVIDER}/descriptors/ORIGINAL-DESCRIPTOR/" in path
                for path, _ in mercury_restored)
 
-    exact = os.path.join(tmp, "exact.tendies")
     descriptor_uuid = "4C654322-41FA-452D-A463-8E28925A378D"
     configuration_uuid = "C5EB18DA-A31A-42A8-8244-B37EE42E9427"
-    metadata = plistlib.dumps({"provider": MERCURY_PROVIDER})
-    with zipfile.ZipFile(exact, "w") as archive:
-        for root, item in (("descriptors", descriptor_uuid),
-                           ("configurations", configuration_uuid)):
+    for provider in (MERCURY_PROVIDER, COLLECTIONS_PROVIDER, PHOTOS_PROVIDER):
+        exact = os.path.join(tmp, f"exact-{provider}.tendies")
+        metadata = plistlib.dumps({"provider": provider})
+        with zipfile.ZipFile(exact, "w") as archive:
+            for root, item in (("descriptors", descriptor_uuid),
+                               ("configurations", configuration_uuid)):
+                base = f"{root}/{item}"
+                archive.writestr(f"{base}/com.apple.posterkit.provider.identifierURL."
+                                 "suggestionMetadata.plist", metadata)
+                archive.writestr(
+                    f"{base}/com.apple.posterkit.provider.descriptor.identifier", b"v5x")
+                archive.writestr(f"{base}/versions/0/contents/payload", root.encode())
+        recovered = ExactConfigurationTendie(exact)
+        assert recovered.provider == provider
+        assert recovered.descriptor_name == descriptor_uuid
+        assert recovered.configuration_uuid == configuration_uuid
+        with tempfile.TemporaryDirectory() as output:
+            exact_files = recovered.build_restore_files(output)
+            exact_paths = [item.restore_path for item in exact_files]
+        assert any(f"/{provider}/descriptors/{descriptor_uuid}/" in p
+                   for p in exact_paths)
+        assert any(f"/{provider}/configurations/{configuration_uuid}/" in p
+                   for p in exact_paths)
+        assert not any("PBFPosterExtensionDataStoreSQLiteDatabase" in p
+                       for p in exact_paths)
+
+    mixed = os.path.join(tmp, "mixed.tendies")
+    with zipfile.ZipFile(mixed, "w") as archive:
+        for root, item, provider in (("descriptors", descriptor_uuid, MERCURY_PROVIDER),
+                                     ("configurations", configuration_uuid, PHOTOS_PROVIDER)):
             base = f"{root}/{item}"
             archive.writestr(f"{base}/com.apple.posterkit.provider.identifierURL."
-                             "suggestionMetadata.plist", metadata)
+                             "suggestionMetadata.plist",
+                             plistlib.dumps({"provider": provider}))
             archive.writestr(
                 f"{base}/com.apple.posterkit.provider.descriptor.identifier", b"v5x")
-            archive.writestr(f"{base}/versions/0/contents/payload", root.encode())
-    recovered = ExactConfigurationTendie(exact)
-    assert recovered.descriptor_name == descriptor_uuid
-    assert recovered.configuration_uuid == configuration_uuid
-    with tempfile.TemporaryDirectory() as output:
-        exact_files = recovered.build_restore_files(output)
-        exact_paths = [item.restore_path for item in exact_files]
-    assert any(f"/{MERCURY_PROVIDER}/descriptors/{descriptor_uuid}/" in p
-               for p in exact_paths)
-    assert any(f"/{MERCURY_PROVIDER}/configurations/{configuration_uuid}/" in p
-               for p in exact_paths)
-    assert not any("PBFPosterExtensionDataStoreSQLiteDatabase" in p
-                   for p in exact_paths)
+    try:
+        ExactConfigurationTendie(mixed)
+        raise AssertionError("Mixed providers were accepted")
+    except Exception as exc:
+        assert "different providers" in str(exc)
 
     unsupported = os.path.join(tmp, "unsupported.tendies")
     make_tendie(unsupported, provider="com.example.UnsupportedPoster")

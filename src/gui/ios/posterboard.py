@@ -78,15 +78,15 @@ class IOSPosterboardPage(QWidget):
         reset_layout.addWidget(self._raw_restore_caption)
 
         self._exact_recovery_btn = QPushButton(QCoreApplication.translate(
-            "Nugget", "Recover Original Mercury Configuration (iOS 26)"))
+            "Nugget", "Register Original Poster Configuration (iOS 26)"))
         self._exact_recovery_btn.setCursor(Qt.PointingHandCursor)
         self._exact_recovery_btn.clicked.connect(self._recover_exact_configuration)
         reset_layout.addWidget(self._exact_recovery_btn)
 
         self._exact_recovery_caption = QLabel(QCoreApplication.translate(
             "Nugget",
-            "Fallback recovery: restores one original Mercury descriptor/configuration "
-            "pair and adds only its missing registration to a fresh copy of the current database."
+            "Restores one original descriptor/configuration pair for Collections, Mercury "
+            "or Photos and registers its provider in a fresh copy of the current database."
         ))
         self._exact_recovery_caption.setWordWrap(True)
         reset_layout.addWidget(self._exact_recovery_caption)
@@ -747,13 +747,13 @@ class IOSPosterboardPage(QWidget):
                 self.window,
                 QCoreApplication.translate("Nugget", "Clear Exact Recovery"),
                 QCoreApplication.translate(
-                    "Nugget", "Clear the scheduled exact Mercury recovery?"),
+                    "Nugget", "Clear the scheduled poster registration?"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No)
             if answer == QMessageBox.Yes:
                 pb.exact_recovery_tendies.clear()
                 self._exact_recovery_btn.setText(QCoreApplication.translate(
-                    "Nugget", "Recover Original Mercury Configuration (iOS 26)"))
+                    "Nugget", "Register Original Poster Configuration (iOS 26)"))
             return
         if pb.raw_descriptor_tendies:
             QMessageBox.warning(
@@ -773,11 +773,11 @@ class IOSPosterboardPage(QWidget):
                 self.window,
                 QCoreApplication.translate("Nugget", "iOS 26 Only"),
                 QCoreApplication.translate(
-                    "Nugget", "Exact Mercury recovery requires a connected iOS 26 device."))
+                    "Nugget", "Poster registration requires a connected iOS 26 device."))
             return
         file, _ = QFileDialog.getOpenFileName(
             self.window,
-            QCoreApplication.translate("Nugget", "Select Exact Mercury Recovery Archive"),
+            QCoreApplication.translate("Nugget", "Select Original Poster Archive"),
             "", "Zip Files (*.tendies)")
         if not file:
             return
@@ -792,22 +792,22 @@ class IOSPosterboardPage(QWidget):
         item = pb.exact_recovery_tendies[0]
         answer = QMessageBox.warning(
             self.window,
-            QCoreApplication.translate("Nugget", "Schedule Exact Mercury Recovery"),
+            QCoreApplication.translate("Nugget", "Schedule Poster Registration"),
             QCoreApplication.translate(
                 "Nugget",
                 "GoldenNugget will first back up the current PosterBoard database, "
-                "then restore the original descriptor and configuration without "
-                "renaming them. It will add or repair only configuration {0}; "
+                "then restore the original {0} descriptor and configuration without "
+                "renaming them. It will register configuration {1}; "
                 "existing wallpapers and the current selection are preserved.\n\n"
                 "Keep the iPhone unlocked and awake. Schedule this recovery?").format(
-                    item.configuration_uuid),
+                    item.provider, item.configuration_uuid),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No)
         if answer != QMessageBox.Yes:
             pb.exact_recovery_tendies.clear()
             return
         self._exact_recovery_btn.setText(QCoreApplication.translate(
-            "Nugget", "Exact Mercury Recovery Scheduled"))
+            "Nugget", "Poster Registration Scheduled"))
         QMessageBox.information(
             self.window,
             QCoreApplication.translate("Nugget", "Exact Recovery Scheduled"),

@@ -117,7 +117,7 @@ class PosterboardTweak(Tweak):
         return True
 
     def add_exact_recovery_tendie(self, file: str):
-        """Queue a byte-preserving configuration plus narrow DB registration."""
+        """Queue a provider-verified pair plus narrow DB registration."""
         if (self.tendies or self.raw_descriptor_tendies
                 or self.cleanup_duplicate_collections or self.videoFile is not None
                 or self.resetModes or self.full_reset):
@@ -542,10 +542,10 @@ class PosterboardTweak(Tweak):
 
     def _apply_exact_recovery(self, files_to_restore, output_dir, templates,
                               version, update_label):
-        """Restore one original Mercury pair and merge only its DB registration."""
+        """Restore one original provider pair and merge only its DB registration."""
         device_version = Version(version)
         if not (Version("26.0") <= device_version < Version("27.0")):
-            raise NuggetException("Exact Mercury recovery is available only on iOS 26.")
+            raise NuggetException("Original poster registration is available only on iOS 26.")
         posterboard_templates = [
             template for template in templates
             if template.domain in (
@@ -556,7 +556,7 @@ class PosterboardTweak(Tweak):
                 "Exact recovery cannot be combined with normal tendies, raw "
                 "descriptors, templates, video wallpapers, or resets.")
 
-        update_label(QCoreApplication.tr("Preparing exact Mercury configuration recovery..."))
+        update_label(QCoreApplication.tr("Preparing original poster configuration..."))
         self.config_manager.start_staging()
         for index, tendie in enumerate(self.exact_recovery_tendies):
             tendie_output = os.path.join(output_dir, f"exact-recovery-{index}")

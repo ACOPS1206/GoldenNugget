@@ -1,8 +1,8 @@
-"""Exact PosterBoard configuration recovery archives.
+"""Original PosterBoard descriptor and configuration registration archives.
 
 Unlike normal tendies, these archives preserve the descriptor/configuration
-folder UUIDs and every file byte.  They are intentionally limited to one
-MercuryPoster pair and contain no database file; registration is merged into
+folder UUIDs and every file byte.  They contain one matching provider pair and
+no database file; registration is merged into
 the freshly fetched on-device database by :class:`PBConfigManager`.
 """
 from __future__ import annotations
@@ -17,7 +17,9 @@ from pathlib import PurePosixPath
 from src.exceptions.nugget_exception import NuggetException
 from src.utils.file_to_restore import FileToRestore
 
-from .raw_descriptor_tendie import MERCURY_PROVIDER, RAW_STRUCTURE_VERSION, _plist_strings
+from .raw_descriptor_tendie import (
+    ALLOWED_PROVIDERS, RAW_STRUCTURE_VERSION, _plist_strings,
+)
 
 
 _ROOTS = {"descriptors", "configurations"}
@@ -28,12 +30,12 @@ _UUID_RE = re.compile(
 
 
 class ExactConfigurationTendie:
-    """One byte-preserved Mercury descriptor plus its original configuration."""
+    """One byte-preserved descriptor and configuration for one known provider."""
 
     def __init__(self, path: str):
         self.path = path
         self.name = os.path.basename(path)
-        self.provider = MERCURY_PROVIDER
+        self.provider = ""
         self.descriptor_name = ""
         self.configuration_uuid = ""
         self._members: list[tuple[str, str, str]] = []
@@ -76,7 +78,7 @@ class ExactConfigurationTendie:
                 names[root].add(item_name)
                 if len(names[root]) > 1:
                     raise NuggetException(
-                        "Exact Mercury recovery accepts exactly one descriptor and one configuration.")
+                        "Registration accepts exactly one descriptor and one configuration.")
                 mode = (info.external_attr >> 16) & 0xFFFF
                 if mode and stat.S_ISLNK(mode):
                     raise NuggetException("Symbolic links are not allowed in exact recovery archives.")
@@ -100,15 +102,21 @@ class ExactConfigurationTendie:
 
         if len(names["descriptors"]) != 1 or len(names["configurations"]) != 1:
             raise NuggetException(
-                "Exact Mercury recovery requires one descriptor and one configuration.")
+                "Registration requires one descriptor and one configuration.")
         descriptor = next(iter(names["descriptors"]))
         configuration = next(iter(names["configurations"]))
         if not _UUID_RE.fullmatch(descriptor) or not _UUID_RE.fullmatch(configuration):
             raise NuggetException("Descriptor and configuration folder names must be original UUIDs.")
+        providers = []
         for key in (("descriptors", descriptor), ("configurations", configuration)):
-            if MERCURY_PROVIDER not in metadata.get(key, set()):
+            matches = ALLOWED_PROVIDERS.intersection(metadata.get(key, set()))
+            if len(matches) != 1:
                 raise NuggetException(
-                    f"{key[1]} is not verified as a {MERCURY_PROVIDER} item.")
+                    f"{key[1]} must identify exactly one supported PosterBoard provider.")
+            providers.append(matches.pop())
+        if providers[0] != providers[1]:
+            raise NuggetException(
+                "Descriptor and configuration belong to different providers.")
         descriptor_id = identifiers.get(("descriptors", descriptor))
         configuration_id = identifiers.get(("configurations", configuration))
         if not descriptor_id or descriptor_id != configuration_id:
@@ -116,6 +124,7 @@ class ExactConfigurationTendie:
                 "Descriptor and configuration identifiers are missing or do not match.")
         self.descriptor_name = descriptor
         self.configuration_uuid = configuration
+        self.provider = providers[0]
 
     def build_restore_files(self, output_dir: str) -> list[FileToRestore]:
         result = []

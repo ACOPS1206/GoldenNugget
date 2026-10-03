@@ -682,7 +682,7 @@ class ApplyMixin:
             )
             add(
                 QCoreApplication.translate(
-                    "Nugget", "Exact Mercury Configuration Recovery"),
+                    "Nugget", "Original Poster Registration"),
                 len(pb.exact_recovery_tendies),
             )
             add(

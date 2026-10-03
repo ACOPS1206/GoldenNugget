@@ -499,7 +499,7 @@ class DeviceManager:
             raw_sparse = os.environ.get("GOLDENNUGGET_NO_PROTECTIVE_BACKUP") == "1"
             if (exact_recovery or duplicate_cleanup) and raw_sparse:
                 raise NuggetException(
-                    "Exact Mercury recovery requires a fresh PosterBoard database backup; "
+                    "Poster registration requires a fresh PosterBoard database backup; "
                     "GOLDENNUGGET_NO_PROTECTIVE_BACKUP cannot be used for this action.")
             if raw_sparse:
                 # Kill switch: straight raw sparse pass, no protective backup at
@@ -562,7 +562,7 @@ class DeviceManager:
                     log_warn("GOLDENNUGGET_SKIP_PB_BACKUP=1 set; skipping PosterBoard DB fetch")
                     if exact_recovery or duplicate_cleanup:
                         raise NuggetException(
-                            "Exact Mercury recovery requires a fresh PosterBoard database backup; "
+                            "Poster registration requires a fresh PosterBoard database backup; "
                             "GOLDENNUGGET_SKIP_PB_BACKUP cannot be used for this action.")
                 else:
                     pb_database_ok = await self._backup_posterboard_database(

@@ -411,8 +411,9 @@ class PBConfigManager:
         """Register exact recovered configurations in a fresh device DB.
 
         This deliberately leaves every existing poster, role sort key and
-        SELECTED attribute untouched.  Only missing rows for staged recovery
-        UUIDs are inserted (or their provider is corrected in place).
+        SELECTED attribute untouched. Only missing rows for staged recovery
+        UUIDs are inserted. An existing UUID owned by another provider is a
+        collision and must never be reassigned.
         """
         if self.database is None or not _validate_posterboard_db(self.database):
             raise NuggetException(
@@ -434,12 +435,14 @@ class PBConfigManager:
             sort_key = int(row[0]) if row and row[0] is not None else poster_id
             for item in self.staged_items:
                 existing = cursor.execute(
-                    "SELECT posterId FROM poster WHERE UUID = ?", (item.uuid,)).fetchone()
+                    "SELECT posterId, providerId FROM poster WHERE UUID = ?",
+                    (item.uuid,)).fetchone()
                 if existing:
+                    if existing[1] != item.extension:
+                        raise NuggetException(
+                            f"PosterBoard UUID {item.uuid} is already registered "
+                            f"to {existing[1]}; cannot reassign it to {item.extension}.")
                     item.posterId = existing[0]
-                    cursor.execute(
-                        "UPDATE poster SET providerId = ? WHERE UUID = ?",
-                        (item.extension, item.uuid))
                 else:
                     poster_id += 1
                     item.posterId = poster_id
@@ -474,7 +477,7 @@ class PBConfigManager:
                         "(posterUUID, roleId, roleSortKey) VALUES (?, ?, ?)",
                         (item.uuid, "PRPosterRoleLockScreen", sort_key))
             cursor.execute(
-                "UPDATE sqlite_sequence SET seq = ? WHERE name = 'poster'",
+                "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'poster'",
                 (poster_id,))
             conn.commit()
             integrity = conn.execute("PRAGMA integrity_check").fetchone()
