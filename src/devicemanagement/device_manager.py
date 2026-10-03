@@ -475,11 +475,13 @@ class DeviceManager:
             pb.tendies = original_tendies[:MAX_TENDIES_PER_RESTORE]
 
             raw_descriptor_restore = bool(pb.raw_descriptor_tendies)
-            needs_posterboard = not raw_descriptor_restore and not (
+            exact_recovery = bool(pb.exact_recovery_tendies)
+            needs_posterboard = exact_recovery or (not raw_descriptor_restore and not (
                 len(pb.tendies) == 0 and pb.videoFile is None
-                and len(tweaks[TweakID.Templates].templates) == 0)
+                and len(tweaks[TweakID.Templates].templates) == 0))
             log_info(f'needs_posterboard={needs_posterboard}, tendies={len(pb.tendies)}, '
                      f'raw_descriptors={len(pb.raw_descriptor_tendies)}, '
+                     f'exact_recovery={len(pb.exact_recovery_tendies)}, '
                      f'videoFile={pb.videoFile is not None}')
 
             # Phase 0: protective backup.
@@ -492,6 +494,10 @@ class DeviceManager:
             prepared_root = None
             pb_from_cache = False
             raw_sparse = os.environ.get("GOLDENNUGGET_NO_PROTECTIVE_BACKUP") == "1"
+            if exact_recovery and raw_sparse:
+                raise NuggetException(
+                    "Exact Mercury recovery requires a fresh PosterBoard database backup; "
+                    "GOLDENNUGGET_NO_PROTECTIVE_BACKUP cannot be used for this action.")
             if raw_sparse:
                 # Kill switch: straight raw sparse pass, no protective backup at
                 # any phase. The whole Phase 0 is skipped — no live backup, no
@@ -551,8 +557,18 @@ class DeviceManager:
             if needs_posterboard and not pb_from_cache and not raw_sparse:
                 if os.environ.get("GOLDENNUGGET_SKIP_PB_BACKUP"):
                     log_warn("GOLDENNUGGET_SKIP_PB_BACKUP=1 set; skipping PosterBoard DB fetch")
+                    if exact_recovery:
+                        raise NuggetException(
+                            "Exact Mercury recovery requires a fresh PosterBoard database backup; "
+                            "GOLDENNUGGET_SKIP_PB_BACKUP cannot be used for this action.")
                 else:
-                    await self._backup_posterboard_database(update_label, force=True)
+                    pb_database_ok = await self._backup_posterboard_database(
+                        update_label, force=True)
+                    if exact_recovery and not pb_database_ok:
+                        raise NuggetException(
+                            "Exact Mercury recovery stopped before making changes: "
+                            "the current PosterBoard database could not be backed up. "
+                            "Unlock the iPhone, keep its screen awake, and try again.")
 
             self._apply_hotload_daemon_forcing()
 
@@ -876,15 +892,16 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
         """
         udid = self.get_current_device_udid()
         if not udid:
-            return
+            return False
         # already backed up for this device and no fresh copy required -> reuse it
         if not force and PreferenceManager.has_pbconfig_data(udid):
-            return
+            return True
         pb = tweaks[TweakID.PosterBoard]
-        if (len(pb.tendies) == 0 and pb.videoFile is None
+        if (len(pb.tendies) == 0 and not pb.exact_recovery_tendies
+                and pb.videoFile is None
                 and len(tweaks[TweakID.Templates].templates) == 0):
             # no wallpapers being added, nothing to back up
-            return
+            return False
 
         update_label(QCoreApplication.tr("Fetching PosterBoard database..."))
         from src.restore.posterboard_backup import targeted_posterboard_database_backup
@@ -900,6 +917,7 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                 raise NuggetException("The PosterBoard database is not of the correct format!")
             pb.config_manager.update_for_saved_database(udid)
             update_label(QCoreApplication.tr("PosterBoard database backed up successfully."))
+            return True
         except Exception as e:
             log_error(f"Failed to back up PosterBoard database: {e}\n{traceback.format_exc()}")
             print(f"Failed to back up PosterBoard database: {e}")
@@ -908,6 +926,7 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
                 update_label(QCoreApplication.tr("Warning: could not back up PosterBoard database — device is locked. Please unlock your device and try again."))
             else:
                 update_label(QCoreApplication.tr("Warning: could not back up the PosterBoard database automatically."))
+            return False
 
     async def _apply_tweak_pass(self, update_label=lambda x: None, templates: list = None, prepared_backup_root=None, prompt_password=None, prompt_choice=None, skip_protective_backup: bool = False):
         """Generate all tweak files and restore them to the device in one pass.

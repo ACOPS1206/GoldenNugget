@@ -160,6 +160,10 @@ class PBConfigManager:
         new_conf = PBConfigItem(uuid, ext, set_selected=True)
         self.staged_items.append(new_conf)
 
+    def add_recovery_config(self, uuid: str, ext: str):
+        """Stage an existing configuration without changing current selection."""
+        self.staged_items.append(PBConfigItem(uuid, ext, set_selected=False))
+
     def cache_config_files(self):
         # cache the files for config conversion
         if len(self.config_files) == 0:
@@ -399,6 +403,86 @@ class PBConfigManager:
                 cursor.execute("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)",
                                ("poster", seq))
             conn.commit()
+        finally:
+            conn.close()
+        return self.staged_database
+
+    def merge_recovery_configs(self, output_dir: Optional[str] = None) -> str:
+        """Register exact recovered configurations in a fresh device DB.
+
+        This deliberately leaves every existing poster, role sort key and
+        SELECTED attribute untouched.  Only missing rows for staged recovery
+        UUIDs are inserted (or their provider is corrected in place).
+        """
+        if self.database is None or not _validate_posterboard_db(self.database):
+            raise NuggetException(
+                "A fresh PosterBoard database is required for exact recovery. "
+                "Unlock the device and try Apply again.")
+        recovery_dir = output_dir or QStandardPaths.writableLocation(
+            QStandardPaths.AppDataLocation)
+        self.staged_database = path.join(recovery_dir, f"RECOVERY-{DB_FILE_NAME}")
+        shutil.copyfile(self.database, self.staged_database)
+        conn = sqlite3.connect(self.staged_database, timeout=10)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            row = cursor.execute("SELECT MAX(posterId) FROM poster").fetchone()
+            poster_id = int(row[0]) if row and row[0] is not None else 0
+            row = cursor.execute(
+                "SELECT MAX(roleSortKey) FROM posterRoleMembership WHERE roleId = ?",
+                ("PRPosterRoleLockScreen",)).fetchone()
+            sort_key = int(row[0]) if row and row[0] is not None else poster_id
+            for item in self.staged_items:
+                existing = cursor.execute(
+                    "SELECT posterId FROM poster WHERE UUID = ?", (item.uuid,)).fetchone()
+                if existing:
+                    item.posterId = existing[0]
+                    cursor.execute(
+                        "UPDATE poster SET providerId = ? WHERE UUID = ?",
+                        (item.extension, item.uuid))
+                else:
+                    poster_id += 1
+                    item.posterId = poster_id
+                    cursor.execute(
+                        "INSERT INTO poster (posterId, UUID, providerId) VALUES (?, ?, ?)",
+                        (poster_id, item.uuid, item.extension))
+                usage = json.dumps({
+                    "creationDate": time.time(),
+                    "extensionAvailable": True,
+                    "attributeType": "PRPosterRoleAttributeTypeUsageMetadata",
+                }, separators=(",", ":"))
+                existing_usage = cursor.execute(
+                    "SELECT 1 FROM posterAttributes WHERE posterUUID = ? "
+                    "AND roleId = ? AND attributeIdentifier = ?",
+                    (item.uuid, "PRPosterRoleLockScreen",
+                     "PRPosterRoleAttributeTypeUsageMetadata")).fetchone()
+                if not existing_usage:
+                    cursor.execute(
+                        "INSERT INTO posterAttributes "
+                        "(posterUUID, roleId, attributeIdentifier, attributePayload) "
+                        "VALUES (?, ?, ?, ?)",
+                        (item.uuid, "PRPosterRoleLockScreen",
+                         "PRPosterRoleAttributeTypeUsageMetadata", usage))
+                membership = cursor.execute(
+                    "SELECT 1 FROM posterRoleMembership "
+                    "WHERE posterUUID = ? AND roleId = ?",
+                    (item.uuid, "PRPosterRoleLockScreen")).fetchone()
+                if not membership:
+                    sort_key += 1
+                    cursor.execute(
+                        "INSERT INTO posterRoleMembership "
+                        "(posterUUID, roleId, roleSortKey) VALUES (?, ?, ?)",
+                        (item.uuid, "PRPosterRoleLockScreen", sort_key))
+            cursor.execute(
+                "UPDATE sqlite_sequence SET seq = ? WHERE name = 'poster'",
+                (poster_id,))
+            conn.commit()
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise NuggetException("Exact recovery database failed integrity validation.")
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
         return self.staged_database

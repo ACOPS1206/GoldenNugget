@@ -10,6 +10,7 @@ from PySide6.QtCore import QCoreApplication
 from ..tweak_classes import Tweak
 from .tendie_file import TendieFile
 from .raw_descriptor_tendie import RawDescriptorTendie
+from .exact_configuration_tendie import ExactConfigurationTendie
 from .template_file import TemplateFile
 from .pb_config_manager import (
     DB_FILE_NAME, PBConfigManager, create_empty_posterboard_db)
@@ -27,6 +28,7 @@ class PosterboardTweak(Tweak):
         super().__init__(key=None)
         self.tendies: list[TendieFile] = []
         self.raw_descriptor_tendies: list[RawDescriptorTendie] = []
+        self.exact_recovery_tendies: list[ExactConfigurationTendie] = []
         self.videoThumbnail = None
         self.videoFile = None
         self.loop_video = True
@@ -43,6 +45,7 @@ class PosterboardTweak(Tweak):
     def uses_domains(self):
         return (len(self.tendies) > 0 or self.videoFile != None
                 or len(self.raw_descriptor_tendies) > 0
+                or len(self.exact_recovery_tendies) > 0
                 or len(self.resetModes) > 0 or self.full_reset)
     
     def is_empty(self) -> bool:
@@ -75,7 +78,8 @@ class PosterboardTweak(Tweak):
         the normal configuration conversion and identifier randomization stay
         unchanged.
         """
-        if self.tendies or self.videoFile is not None or self.resetModes or self.full_reset:
+        if (self.tendies or self.exact_recovery_tendies or self.videoFile is not None
+                or self.resetModes or self.full_reset):
             raise NuggetException(
                 "Raw descriptor restore cannot be combined with other PosterBoard "
                 "imports or resets. Clear them first.")
@@ -85,6 +89,18 @@ class PosterboardTweak(Tweak):
             raise NuggetException(
                 "Raw restore accepts at most 10 PosterBoard descriptors.")
         self.raw_descriptor_tendies.append(raw_tendie)
+        return True
+
+    def add_exact_recovery_tendie(self, file: str):
+        """Queue a byte-preserving configuration plus narrow DB registration."""
+        if (self.tendies or self.raw_descriptor_tendies or self.videoFile is not None
+                or self.resetModes or self.full_reset):
+            raise NuggetException(
+                "Exact configuration recovery cannot be combined with other "
+                "PosterBoard imports or resets. Clear them first.")
+        if self.exact_recovery_tendies:
+            raise NuggetException("Only one exact recovery archive can be applied at a time.")
+        self.exact_recovery_tendies.append(ExactConfigurationTendie(file))
         return True
 
     def add_template(self, file: str, version: str = None):
@@ -297,6 +313,15 @@ class PosterboardTweak(Tweak):
         # to 61 (the oldest supported layout) when no DB was fetched.
         self.structure_version = self.config_manager.structure_version if (
             getattr(self.config_manager, "structure_version", 0)) else 61
+        if self.exact_recovery_tendies:
+            self._apply_exact_recovery(
+                files_to_restore=files_to_restore,
+                output_dir=output_dir,
+                templates=templates,
+                version=version,
+                update_label=update_label,
+            )
+            return
         if self.raw_descriptor_tendies:
             self._apply_raw_descriptors(
                 files_to_restore=files_to_restore,
@@ -479,3 +504,54 @@ class PosterboardTweak(Tweak):
             files_to_restore.extend(tendie.build_restore_files(tendie_output))
         update_label(QCoreApplication.tr(
             "Adding raw PosterBoard descriptors without changing IDs..."))
+
+    def _apply_exact_recovery(self, files_to_restore, output_dir, templates,
+                              version, update_label):
+        """Restore one original Mercury pair and merge only its DB registration."""
+        device_version = Version(version)
+        if not (Version("26.0") <= device_version < Version("27.0")):
+            raise NuggetException("Exact Mercury recovery is available only on iOS 26.")
+        posterboard_templates = [
+            template for template in templates
+            if template.domain in (
+                "com.apple.PosterBoard", "AppDomain-com.apple.PosterBoard")]
+        if (self.tendies or self.raw_descriptor_tendies or self.videoFile is not None
+                or self.resetModes or self.full_reset or posterboard_templates):
+            raise NuggetException(
+                "Exact recovery cannot be combined with normal tendies, raw "
+                "descriptors, templates, video wallpapers, or resets.")
+
+        update_label(QCoreApplication.tr("Preparing exact Mercury configuration recovery..."))
+        self.config_manager.start_staging()
+        for index, tendie in enumerate(self.exact_recovery_tendies):
+            tendie_output = os.path.join(output_dir, f"exact-recovery-{index}")
+            os.makedirs(tendie_output, exist_ok=True)
+            files_to_restore.extend(tendie.build_restore_files(tendie_output))
+            self.config_manager.add_recovery_config(
+                tendie.configuration_uuid, tendie.provider)
+
+        staged_db_path = self.config_manager.merge_recovery_configs(output_dir)
+        db_path = (f"/Library/Application Support/PRBPosterExtensionDataStore/"
+                   f"{self.structure_version}/{DB_FILE_NAME}")
+        files_to_restore.append(FileToRestore(
+            contents=None,
+            contents_path=staged_db_path,
+            restore_path=db_path,
+            domain=f"AppDomain-{self.bundle_id}"))
+        for suffix in ("-wal", "-shm"):
+            files_to_restore.append(FileToRestore(
+                contents=b"",
+                restore_path=db_path + suffix,
+                domain=f"AppDomain-{self.bundle_id}"))
+        refresh = {
+            "PBF_LOCALE_DID_CHANGE": False,
+            "PBF_RESET_FILE_PROTECTIONS": True,
+        }
+        files_to_restore.append(FileToRestore(
+            contents=plistlib.dumps(refresh, fmt=plistlib.PlistFormat.FMT_BINARY),
+            restore_path=(
+                "/Library/Preferences/"
+                "com.apple.PosterBoard.unprotectedUserDefaults.plist"),
+            domain=f"AppDomain-{self.bundle_id}"))
+        update_label(QCoreApplication.tr(
+            "Registering the recovered configuration without replacing the database..."))

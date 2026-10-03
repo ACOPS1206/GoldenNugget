@@ -680,6 +680,11 @@ class ApplyMixin:
                 sum(item.descriptor_cnt
                     for item in pb.raw_descriptor_tendies),
             )
+            add(
+                QCoreApplication.translate(
+                    "Nugget", "Exact Mercury Configuration Recovery"),
+                len(pb.exact_recovery_tendies),
+            )
 
         tmpl = tweaks.get(TweakID.Templates)
         if tmpl is not None:

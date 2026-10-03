@@ -77,6 +77,20 @@ class IOSPosterboardPage(QWidget):
         self._raw_restore_caption.setWordWrap(True)
         reset_layout.addWidget(self._raw_restore_caption)
 
+        self._exact_recovery_btn = QPushButton(QCoreApplication.translate(
+            "Nugget", "Recover Original Mercury Configuration (iOS 26)"))
+        self._exact_recovery_btn.setCursor(Qt.PointingHandCursor)
+        self._exact_recovery_btn.clicked.connect(self._recover_exact_configuration)
+        reset_layout.addWidget(self._exact_recovery_btn)
+
+        self._exact_recovery_caption = QLabel(QCoreApplication.translate(
+            "Nugget",
+            "Fallback recovery: restores one original Mercury descriptor/configuration "
+            "pair and adds only its missing registration to a fresh copy of the current database."
+        ))
+        self._exact_recovery_caption.setWordWrap(True)
+        reset_layout.addWidget(self._exact_recovery_caption)
+
         layout.addWidget(reset_card)
 
         # Tab bar
@@ -149,6 +163,9 @@ class IOSPosterboardPage(QWidget):
             QPushButton:hover {{ background-color: {c.surface_hover}; }}
         """)
         self._raw_restore_caption.setStyleSheet(
+            f"color: {c.text_secondary}; font-size: 12px;")
+        self._exact_recovery_btn.setStyleSheet(self._raw_restore_btn.styleSheet())
+        self._exact_recovery_caption.setStyleSheet(
             f"color: {c.text_secondary}; font-size: 12px;")
         self._tab_bar.setStyleSheet(
             f"background-color: {c.bg_primary}; border-top: 1px solid {c.bg_secondary};"
@@ -580,7 +597,8 @@ class IOSPosterboardPage(QWidget):
 
     def show_add_tendies_dialog(self):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
-        if tweaks[TweakID.PosterBoard].raw_descriptor_tendies:
+        if (tweaks[TweakID.PosterBoard].raw_descriptor_tendies or
+                tweaks[TweakID.PosterBoard].exact_recovery_tendies):
             QMessageBox.warning(
                 self.window,
                 QCoreApplication.translate("Nugget", "Raw Restore Scheduled"),
@@ -602,6 +620,13 @@ class IOSPosterboardPage(QWidget):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         pb = tweaks[TweakID.PosterBoard]
+        if pb.exact_recovery_tendies:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "Exact Recovery Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear or apply the pending exact recovery first."))
+            return
         if pb.raw_descriptor_tendies:
             answer = QMessageBox.question(
                 self.window,
@@ -680,6 +705,82 @@ class IOSPosterboardPage(QWidget):
                 "Nugget",
                 "The raw descriptor restore is queued. Click Apply Tweaks to "
                 "send it to the connected iPhone, then restart the iPhone."))
+
+    def _recover_exact_configuration(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        pb = tweaks[TweakID.PosterBoard]
+        if pb.exact_recovery_tendies:
+            answer = QMessageBox.question(
+                self.window,
+                QCoreApplication.translate("Nugget", "Clear Exact Recovery"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear the scheduled exact Mercury recovery?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+            if answer == QMessageBox.Yes:
+                pb.exact_recovery_tendies.clear()
+                self._exact_recovery_btn.setText(QCoreApplication.translate(
+                    "Nugget", "Recover Original Mercury Configuration (iOS 26)"))
+            return
+        if pb.raw_descriptor_tendies:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "Raw Restore Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear or apply the pending raw descriptor restore first."))
+            return
+
+        version = self.window.device_manager.get_current_device_version()
+        try:
+            is_ios26 = Version("26.0") <= Version(version) < Version("27.0")
+        except Exception:
+            is_ios26 = False
+        if not is_ios26:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "iOS 26 Only"),
+                QCoreApplication.translate(
+                    "Nugget", "Exact Mercury recovery requires a connected iOS 26 device."))
+            return
+        file, _ = QFileDialog.getOpenFileName(
+            self.window,
+            QCoreApplication.translate("Nugget", "Select Exact Mercury Recovery Archive"),
+            "", "Zip Files (*.tendies)")
+        if not file:
+            return
+        try:
+            pb.add_exact_recovery_tendie(file)
+        except Exception as exc:
+            QMessageBox.critical(
+                self.window,
+                QCoreApplication.translate("Nugget", "Exact Recovery Rejected"),
+                str(exc))
+            return
+        item = pb.exact_recovery_tendies[0]
+        answer = QMessageBox.warning(
+            self.window,
+            QCoreApplication.translate("Nugget", "Schedule Exact Mercury Recovery"),
+            QCoreApplication.translate(
+                "Nugget",
+                "GoldenNugget will first back up the current PosterBoard database, "
+                "then restore the original descriptor and configuration without "
+                "renaming them. It will add or repair only configuration {0}; "
+                "existing wallpapers and the current selection are preserved.\n\n"
+                "Keep the iPhone unlocked and awake. Schedule this recovery?").format(
+                    item.configuration_uuid),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            pb.exact_recovery_tendies.clear()
+            return
+        self._exact_recovery_btn.setText(QCoreApplication.translate(
+            "Nugget", "Exact Mercury Recovery Scheduled"))
+        QMessageBox.information(
+            self.window,
+            QCoreApplication.translate("Nugget", "Exact Recovery Scheduled"),
+            QCoreApplication.translate(
+                "Nugget", "Click Apply Tweaks while the iPhone is unlocked and awake."))
 
     def refresh_tendies(self):
         for reply, *_ in self._tendie_preview_replies:
