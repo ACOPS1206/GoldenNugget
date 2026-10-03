@@ -9,7 +9,7 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.tweaks.posterboard.raw_descriptor_tendie import (
-    COLLECTIONS_PROVIDER, RawDescriptorTendie,
+    COLLECTIONS_PROVIDER, MERCURY_PROVIDER, RawDescriptorTendie,
 )
 
 
@@ -65,12 +65,18 @@ with tempfile.TemporaryDirectory() as tmp:
     assert any(data == b"meaningful-dotfile" for _, data in restored)
 
     mercury = os.path.join(tmp, "mercury.tendies")
-    make_tendie(mercury, provider="com.apple.MercuryPoster")
+    make_tendie(mercury, provider=MERCURY_PROVIDER)
+    mercury_restored = apply_raw(mercury)
+    assert all(f"/{MERCURY_PROVIDER}/descriptors/ORIGINAL-DESCRIPTOR/" in path
+               for path, _ in mercury_restored)
+
+    unsupported = os.path.join(tmp, "unsupported.tendies")
+    make_tendie(unsupported, provider="com.example.UnsupportedPoster")
     try:
-        RawDescriptorTendie(mercury)
-        raise AssertionError("Mercury archive was accepted")
+        RawDescriptorTendie(unsupported)
+        raise AssertionError("Unsupported provider was accepted")
     except Exception as exc:
-        assert COLLECTIONS_PROVIDER in str(exc)
+        assert "supported provider" in str(exc)
 
     container = os.path.join(tmp, "container.tendies")
     make_tendie(container, root="container")

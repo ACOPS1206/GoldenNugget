@@ -17,12 +17,12 @@ There are 2 formats for these:
 
 ### Temporary iOS 26 raw descriptor recovery
 
-PosterBoard's **Raw Restore Collections Descriptors (iOS 26)** action is a
+PosterBoard's **Raw Restore Poster Descriptors (iOS 26)** action is a
 recovery-only alternative to normal tendies import. It accepts only archives
 whose `descriptor/` or `descriptors/` entries identify
-`com.apple.WallpaperKit.CollectionsPoster` in their suggestion metadata. The
-action copies those descriptor files to the iOS 26 structure-61 descriptors
-directory without renaming folders, rewriting wallpaper IDs, converting them
+either `com.apple.WallpaperKit.CollectionsPoster` or `com.apple.MercuryPoster` in their suggestion metadata. The
+action copies those descriptor files to the matching provider's iOS 26
+structure-61 descriptors directory without renaming folders, rewriting wallpaper IDs, converting them
 to configurations, replacing the PosterBoard database, or clearing existing
 configurations. It cannot be combined with normal PosterBoard imports, video
 wallpapers, templates, or resets in the same apply.

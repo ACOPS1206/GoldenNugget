@@ -64,7 +64,7 @@ class IOSPosterboardPage(QWidget):
         reset_layout.addWidget(self._reset_caption)
 
         self._raw_restore_btn = QPushButton(QCoreApplication.translate(
-            "Nugget", "Raw Restore Collections Descriptors (iOS 26)"))
+            "Nugget", "Raw Restore Poster Descriptors (iOS 26)"))
         self._raw_restore_btn.setCursor(Qt.PointingHandCursor)
         self._raw_restore_btn.clicked.connect(self._raw_restore_descriptors)
         reset_layout.addWidget(self._raw_restore_btn)
@@ -614,7 +614,7 @@ class IOSPosterboardPage(QWidget):
             if answer == QMessageBox.Yes:
                 pb.raw_descriptor_tendies.clear()
                 self._raw_restore_btn.setText(QCoreApplication.translate(
-                    "Nugget", "Raw Restore Collections Descriptors (iOS 26)"))
+                    "Nugget", "Raw Restore Poster Descriptors (iOS 26)"))
             return
 
         version = self.window.device_manager.get_current_device_version()
@@ -629,14 +629,14 @@ class IOSPosterboardPage(QWidget):
                 QCoreApplication.translate("Nugget", "iOS 26 Only"),
                 QCoreApplication.translate(
                     "Nugget",
-                    "Raw CollectionsPoster descriptor restore is available only "
+                    "Raw PosterBoard descriptor restore is available only "
                     "for a connected iOS 26 device."))
             return
 
         file, _ = QFileDialog.getOpenFileName(
             self.window,
             QCoreApplication.translate(
-                "Nugget", "Select CollectionsPoster Descriptor Archive"),
+                "Nugget", "Select PosterBoard Descriptor Archive"),
             "",
             "Zip Files (*.tendies)",
         )
@@ -649,7 +649,7 @@ class IOSPosterboardPage(QWidget):
             QCoreApplication.translate(
                 "Nugget",
                 "This temporary recovery action will restore only validated "
-                "CollectionsPoster descriptor files, preserving their folder names "
+                "supported CollectionsPoster or MercuryPoster descriptor files, preserving their folder names "
                 "and internal IDs. Existing configurations and the PosterBoard "
                 "database will not be changed.\n\nSchedule this archive for the next apply?"),
             QMessageBox.Yes | QMessageBox.No,

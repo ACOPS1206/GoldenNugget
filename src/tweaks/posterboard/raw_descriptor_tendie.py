@@ -1,4 +1,4 @@
-"""Validated, byte-preserving CollectionsPoster descriptor archives.
+"""Validated, byte-preserving PosterBoard descriptor archives.
 
 This is deliberately separate from :mod:`tendie_file`: normal tendies are
 converted to configurations and have their identifiers randomized.  The raw
@@ -18,6 +18,8 @@ from src.utils.file_to_restore import FileToRestore
 
 
 COLLECTIONS_PROVIDER = "com.apple.WallpaperKit.CollectionsPoster"
+MERCURY_PROVIDER = "com.apple.MercuryPoster"
+ALLOWED_PROVIDERS = {COLLECTIONS_PROVIDER, MERCURY_PROVIDER}
 RAW_STRUCTURE_VERSION = 61
 _DESCRIPTOR_ROOTS = {"descriptor", "descriptors"}
 _SUGGESTION_METADATA = (
@@ -38,13 +40,14 @@ def _plist_strings(value):
 
 
 class RawDescriptorTendie:
-    """A validated descriptor-only tendie for CollectionsPoster recovery."""
+    """A validated descriptor-only tendie for supported PosterBoard providers."""
 
     def __init__(self, path: str):
         self.path = path
         self.name = os.path.basename(path)
         self._members: list[tuple[str, str]] = []
         self.descriptor_names: list[str] = []
+        self.provider: str | None = None
         self._validate()
 
     @property
@@ -90,7 +93,7 @@ class RawDescriptorTendie:
                 descriptor_names.add(descriptor_name)
                 if len(descriptor_names) > 10:
                     raise NuggetException(
-                        "Raw restore accepts at most 10 CollectionsPoster descriptors.")
+                        "Raw restore accepts at most 10 PosterBoard descriptors.")
 
                 unix_mode = (info.external_attr >> 16) & 0xFFFF
                 if unix_mode and stat.S_ISLNK(unix_mode):
@@ -118,13 +121,22 @@ class RawDescriptorTendie:
         if not descriptor_names or not self._members:
             raise NuggetException("No descriptors were found in this tendies file.")
 
+        provider_by_descriptor = {}
         for descriptor_name in sorted(descriptor_names):
             strings = metadata_by_descriptor.get(descriptor_name, set())
-            if COLLECTIONS_PROVIDER not in strings:
+            matches = ALLOWED_PROVIDERS.intersection(strings)
+            if len(matches) != 1:
+                allowed = ", ".join(sorted(ALLOWED_PROVIDERS))
                 raise NuggetException(
-                    f"{descriptor_name} is not verified as a {COLLECTIONS_PROVIDER} "
-                    "descriptor. Raw restore was not scheduled.")
+                    f"{descriptor_name} is not verified as exactly one supported "
+                    f"provider ({allowed}). Raw restore was not scheduled.")
+            provider_by_descriptor[descriptor_name] = matches.pop()
 
+        providers = set(provider_by_descriptor.values())
+        if len(providers) != 1:
+            raise NuggetException(
+                "A raw descriptor archive cannot mix PosterBoard providers.")
+        self.provider = providers.pop()
         self.descriptor_names = sorted(descriptor_names)
 
     def extract_files(self, output_dir: str) -> list[tuple[str, str]]:
@@ -152,7 +164,7 @@ class RawDescriptorTendie:
         """Build the standard restore-pipeline payload for this archive."""
         restore_root = (
             "/Library/Application Support/PRBPosterExtensionDataStore/"
-            f"{RAW_STRUCTURE_VERSION}/Extensions/{COLLECTIONS_PROVIDER}/descriptors"
+            f"{RAW_STRUCTURE_VERSION}/Extensions/{self.provider}/descriptors"
         )
         return [
             FileToRestore(

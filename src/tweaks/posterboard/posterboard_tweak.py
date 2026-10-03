@@ -69,7 +69,7 @@ class PosterboardTweak(Tweak):
         return self.verify_tendie(new_tendie)
 
     def add_raw_descriptor_tendie(self, file: str):
-        """Queue a byte-preserving CollectionsPoster descriptor restore.
+        """Queue a byte-preserving PosterBoard descriptor restore.
 
         This recovery mode is intentionally isolated from normal tendies so
         the normal configuration conversion and identifier randomization stay
@@ -83,7 +83,7 @@ class PosterboardTweak(Tweak):
         if raw_tendie.descriptor_cnt + sum(
                 item.descriptor_cnt for item in self.raw_descriptor_tendies) > 10:
             raise NuggetException(
-                "Raw restore accepts at most 10 CollectionsPoster descriptors.")
+                "Raw restore accepts at most 10 PosterBoard descriptors.")
         self.raw_descriptor_tendies.append(raw_tendie)
         return True
 
@@ -453,11 +453,11 @@ class PosterboardTweak(Tweak):
 
     def _apply_raw_descriptors(self, files_to_restore, output_dir, templates,
                                version, update_label):
-        """Add only original CollectionsPoster descriptor files to the restore."""
+        """Add only validated original PosterBoard descriptor files to the restore."""
         device_version = Version(version)
         if not (Version("26.2") <= device_version < Version("27.0")):
             raise NuggetException(
-                "Raw CollectionsPoster descriptor restore is limited to "
+                "Raw PosterBoard descriptor restore is limited to "
                 "supported iOS 26 versions (26.2 or newer).")
 
         posterboard_templates = [
@@ -472,10 +472,10 @@ class PosterboardTweak(Tweak):
                 "PosterBoard templates, video wallpapers, or resets.")
 
         update_label(QCoreApplication.tr(
-            "Preparing raw CollectionsPoster descriptors..."))
+            "Preparing raw PosterBoard descriptors..."))
         for index, tendie in enumerate(self.raw_descriptor_tendies):
             tendie_output = os.path.join(output_dir, f"raw-descriptors-{index}")
             os.makedirs(tendie_output, exist_ok=True)
             files_to_restore.extend(tendie.build_restore_files(tendie_output))
         update_label(QCoreApplication.tr(
-            "Adding raw CollectionsPoster descriptors without changing IDs..."))
+            "Adding raw PosterBoard descriptors without changing IDs..."))
