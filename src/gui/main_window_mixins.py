@@ -674,6 +674,12 @@ class ApplyMixin:
         pb = tweaks.get(TweakID.PosterBoard)
         if pb is not None:
             add(QCoreApplication.translate("Nugget", "PosterBoard"), len(pb.tendies))
+            add(
+                QCoreApplication.translate(
+                    "Nugget", "Raw PosterBoard Descriptors"),
+                sum(item.descriptor_cnt
+                    for item in pb.raw_descriptor_tendies),
+            )
 
         tmpl = tweaks.get(TweakID.Templates)
         if tmpl is not None:
