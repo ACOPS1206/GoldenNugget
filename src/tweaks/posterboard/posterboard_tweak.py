@@ -9,6 +9,7 @@ from PySide6.QtCore import QCoreApplication
 
 from ..tweak_classes import Tweak
 from .tendie_file import TendieFile
+from .raw_descriptor_tendie import RawDescriptorTendie
 from .template_file import TemplateFile
 from .pb_config_manager import (
     DB_FILE_NAME, PBConfigManager, create_empty_posterboard_db)
@@ -25,6 +26,7 @@ class PosterboardTweak(Tweak):
     def __init__(self):
         super().__init__(key=None)
         self.tendies: list[TendieFile] = []
+        self.raw_descriptor_tendies: list[RawDescriptorTendie] = []
         self.videoThumbnail = None
         self.videoFile = None
         self.loop_video = True
@@ -40,6 +42,7 @@ class PosterboardTweak(Tweak):
 
     def uses_domains(self):
         return (len(self.tendies) > 0 or self.videoFile != None
+                or len(self.raw_descriptor_tendies) > 0
                 or len(self.resetModes) > 0 or self.full_reset)
     
     def is_empty(self) -> bool:
@@ -64,6 +67,26 @@ class PosterboardTweak(Tweak):
     def add_tendie(self, file: str):
         new_tendie = TendieFile(path=file)
         return self.verify_tendie(new_tendie)
+
+    def add_raw_descriptor_tendie(self, file: str):
+        """Queue a byte-preserving CollectionsPoster descriptor restore.
+
+        This recovery mode is intentionally isolated from normal tendies so
+        the normal configuration conversion and identifier randomization stay
+        unchanged.
+        """
+        if self.tendies or self.videoFile is not None or self.resetModes or self.full_reset:
+            raise NuggetException(
+                "Raw descriptor restore cannot be combined with other PosterBoard "
+                "imports or resets. Clear them first.")
+        raw_tendie = RawDescriptorTendie(path=file)
+        if raw_tendie.descriptor_cnt + sum(
+                item.descriptor_cnt for item in self.raw_descriptor_tendies) > 10:
+            raise NuggetException(
+                "Raw restore accepts at most 10 CollectionsPoster descriptors.")
+        self.raw_descriptor_tendies.append(raw_tendie)
+        return True
+
     def add_template(self, file: str, version: str = None):
         try:
             new_template = TemplateFile(path=file, device_version=version)
@@ -274,6 +297,15 @@ class PosterboardTweak(Tweak):
         # to 61 (the oldest supported layout) when no DB was fetched.
         self.structure_version = self.config_manager.structure_version if (
             getattr(self.config_manager, "structure_version", 0)) else 61
+        if self.raw_descriptor_tendies:
+            self._apply_raw_descriptors(
+                files_to_restore=files_to_restore,
+                output_dir=output_dir,
+                templates=templates,
+                version=version,
+                update_label=update_label,
+            )
+            return
         if self.full_reset:
             # Full reset: wipe the entire PosterBoard container and replace
             # the on-device sqlite with an empty (schema-only) database.
@@ -418,3 +450,32 @@ class PosterboardTweak(Tweak):
                 domain=f"AppDomain-{self.bundle_id}"
             ))
         update_label(QCoreApplication.tr("Adding other tweaks..."))
+
+    def _apply_raw_descriptors(self, files_to_restore, output_dir, templates,
+                               version, update_label):
+        """Add only original CollectionsPoster descriptor files to the restore."""
+        device_version = Version(version)
+        if not (Version("26.2") <= device_version < Version("27.0")):
+            raise NuggetException(
+                "Raw CollectionsPoster descriptor restore is limited to "
+                "supported iOS 26 versions (26.2 or newer).")
+
+        posterboard_templates = [
+            template for template in templates
+            if template.domain in (
+                "com.apple.PosterBoard", "AppDomain-com.apple.PosterBoard")
+        ]
+        if (self.tendies or self.videoFile is not None or self.resetModes
+                or self.full_reset or posterboard_templates):
+            raise NuggetException(
+                "Raw descriptor restore cannot be combined with normal tendies, "
+                "PosterBoard templates, video wallpapers, or resets.")
+
+        update_label(QCoreApplication.tr(
+            "Preparing raw CollectionsPoster descriptors..."))
+        for index, tendie in enumerate(self.raw_descriptor_tendies):
+            tendie_output = os.path.join(output_dir, f"raw-descriptors-{index}")
+            os.makedirs(tendie_output, exist_ok=True)
+            files_to_restore.extend(tendie.build_restore_files(tendie_output))
+        update_label(QCoreApplication.tr(
+            "Adding raw CollectionsPoster descriptors without changing IDs..."))

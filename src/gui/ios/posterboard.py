@@ -12,6 +12,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRe
 from src.gui.ios.components import IOSCard, IOSPrimaryButton
 from src.gui.theme import ColorThemeManager
 from src.tweaks.tweaks import tweaks, TweakID
+from src.devicemanagement.constants import Version
 
 
 class TemplatePreviewCard(QLabel):
@@ -61,6 +62,20 @@ class IOSPosterboardPage(QWidget):
         ))
         self._reset_caption.setWordWrap(True)
         reset_layout.addWidget(self._reset_caption)
+
+        self._raw_restore_btn = QPushButton(QCoreApplication.translate(
+            "Nugget", "Raw Restore Collections Descriptors (iOS 26)"))
+        self._raw_restore_btn.setCursor(Qt.PointingHandCursor)
+        self._raw_restore_btn.clicked.connect(self._raw_restore_descriptors)
+        reset_layout.addWidget(self._raw_restore_btn)
+
+        self._raw_restore_caption = QLabel(QCoreApplication.translate(
+            "Nugget",
+            "Recovery tool: restores descriptor files as-is. It does not change "
+            "IDs, convert to configurations, reset PosterBoard, or modify its database."
+        ))
+        self._raw_restore_caption.setWordWrap(True)
+        reset_layout.addWidget(self._raw_restore_caption)
 
         layout.addWidget(reset_card)
 
@@ -121,6 +136,20 @@ class IOSPosterboardPage(QWidget):
             QPushButton:hover {{ background-color: {c.surface_hover}; }}
         """)
         self._reset_caption.setStyleSheet(f"color: {c.text_secondary}; font-size: 12px;")
+        self._raw_restore_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {c.bg_secondary};
+                border: 1px solid {c.border};
+                border-radius: 10px;
+                color: {c.accent};
+                font-size: 14px;
+                font-weight: 600;
+                padding: 10px;
+            }}
+            QPushButton:hover {{ background-color: {c.surface_hover}; }}
+        """)
+        self._raw_restore_caption.setStyleSheet(
+            f"color: {c.text_secondary}; font-size: 12px;")
         self._tab_bar.setStyleSheet(
             f"background-color: {c.bg_primary}; border-top: 1px solid {c.bg_secondary};"
         )
@@ -550,7 +579,16 @@ class IOSPosterboardPage(QWidget):
         dialog.exec()
 
     def show_add_tendies_dialog(self):
-        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        if tweaks[TweakID.PosterBoard].raw_descriptor_tendies:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "Raw Restore Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget",
+                    "Apply the pending raw descriptor restore, or click the Raw "
+                    "Restore button to clear it, before importing normal tendies."))
+            return
         selected_files, _ = QFileDialog.getOpenFileNames(
             self.window, QCoreApplication.translate("Nugget", "Select PosterBoard Files"), "", "Zip Files (*.tendies)"
         )
@@ -559,6 +597,89 @@ class IOSPosterboardPage(QWidget):
                 if not tweaks[TweakID.PosterBoard].add_tendie(file):
                     break
             self.refresh_tendies()
+
+    def _raw_restore_descriptors(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        pb = tweaks[TweakID.PosterBoard]
+        if pb.raw_descriptor_tendies:
+            answer = QMessageBox.question(
+                self.window,
+                QCoreApplication.translate("Nugget", "Clear Raw Restore"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear the scheduled raw descriptor restore?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer == QMessageBox.Yes:
+                pb.raw_descriptor_tendies.clear()
+                self._raw_restore_btn.setText(QCoreApplication.translate(
+                    "Nugget", "Raw Restore Collections Descriptors (iOS 26)"))
+            return
+
+        version = self.window.device_manager.get_current_device_version()
+        try:
+            parsed_version = Version(version)
+            is_ios26 = Version("26.2") <= parsed_version < Version("27.0")
+        except Exception:
+            is_ios26 = False
+        if not is_ios26:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "iOS 26 Only"),
+                QCoreApplication.translate(
+                    "Nugget",
+                    "Raw CollectionsPoster descriptor restore is available only "
+                    "for a connected iOS 26 device."))
+            return
+
+        file, _ = QFileDialog.getOpenFileName(
+            self.window,
+            QCoreApplication.translate(
+                "Nugget", "Select CollectionsPoster Descriptor Archive"),
+            "",
+            "Zip Files (*.tendies)",
+        )
+        if not file:
+            return
+
+        answer = QMessageBox.warning(
+            self.window,
+            QCoreApplication.translate("Nugget", "Schedule Raw Descriptor Restore"),
+            QCoreApplication.translate(
+                "Nugget",
+                "This temporary recovery action will restore only validated "
+                "CollectionsPoster descriptor files, preserving their folder names "
+                "and internal IDs. Existing configurations and the PosterBoard "
+                "database will not be changed.\n\nSchedule this archive for the next apply?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            pb.add_raw_descriptor_tendie(file)
+        except Exception as exc:
+            QMessageBox.critical(
+                self.window,
+                QCoreApplication.translate("Nugget", "Raw Restore Rejected"),
+                str(exc),
+            )
+            return
+
+        count = sum(
+            item.descriptor_cnt
+            for item in pb.raw_descriptor_tendies)
+        self._raw_restore_btn.setText(QCoreApplication.translate(
+            "Nugget", "Raw Restore Scheduled ({0} descriptors)").format(count))
+        QMessageBox.information(
+            self.window,
+            QCoreApplication.translate("Nugget", "Raw Restore Scheduled"),
+            QCoreApplication.translate(
+                "Nugget",
+                "The raw descriptor restore is queued. Click Apply Tweaks to "
+                "send it to the connected iPhone, then restart the iPhone."))
 
     def refresh_tendies(self):
         for reply, *_ in self._tendie_preview_replies:

@@ -474,10 +474,13 @@ class DeviceManager:
             # iOS 26.2+ (iOS 27 era) uses the heavy three-phase protective restore
             pb.tendies = original_tendies[:MAX_TENDIES_PER_RESTORE]
 
-            needs_posterboard = not (
+            raw_descriptor_restore = bool(pb.raw_descriptor_tendies)
+            needs_posterboard = not raw_descriptor_restore and not (
                 len(pb.tendies) == 0 and pb.videoFile is None
                 and len(tweaks[TweakID.Templates].templates) == 0)
-            log_info(f'needs_posterboard={needs_posterboard}, tendies={len(pb.tendies)}, videoFile={pb.videoFile is not None}')
+            log_info(f'needs_posterboard={needs_posterboard}, tendies={len(pb.tendies)}, '
+                     f'raw_descriptors={len(pb.raw_descriptor_tendies)}, '
+                     f'videoFile={pb.videoFile is not None}')
 
             # Phase 0: protective backup.
             #  - iOS 27+ (partial support): the heavy backup is built and later

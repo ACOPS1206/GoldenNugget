@@ -15,6 +15,18 @@ There are 2 formats for these:
     - Default is Collections (`com.apple.WallpaperKit.CollectionsPoster`). Do not add anything to the folder name.
   - It is recommended to use these if you are restoring descriptors to collections since this will be more future proof. Randomization of IDs is also safer.
 
+### Temporary iOS 26 raw descriptor recovery
+
+PosterBoard's **Raw Restore Collections Descriptors (iOS 26)** action is a
+recovery-only alternative to normal tendies import. It accepts only archives
+whose `descriptor/` or `descriptors/` entries identify
+`com.apple.WallpaperKit.CollectionsPoster` in their suggestion metadata. The
+action copies those descriptor files to the iOS 26 structure-61 descriptors
+directory without renaming folders, rewriting wallpaper IDs, converting them
+to configurations, replacing the PosterBoard database, or clearing existing
+configurations. It cannot be combined with normal PosterBoard imports, video
+wallpapers, templates, or resets in the same apply.
+
 # Batter Files (Templates)
 Batter files are similar to tendies files in that they store the file structure to be restored to a given domain. Nugget will restore the files in the structure of the "Container" folder in your batter file.
 
