@@ -427,6 +427,7 @@ class DeviceManager:
                 tweaks[TweakID.PosterBoard].config_manager.staged_database = None
                 tweaks[TweakID.PosterBoard].resetModes = []
                 tweaks[TweakID.PosterBoard].full_reset = False
+            tweaks[TweakID.PosterBoard].cleanup_duplicate_collections = False
             msg = QCoreApplication.tr("Your device will now restart.\n\nRemember to turn Find My back on!")
             if not self.pref_manager.auto_reboot:
                 msg = QCoreApplication.tr("Please restart your device to see changes.")
@@ -476,12 +477,14 @@ class DeviceManager:
 
             raw_descriptor_restore = bool(pb.raw_descriptor_tendies)
             exact_recovery = bool(pb.exact_recovery_tendies)
-            needs_posterboard = exact_recovery or (not raw_descriptor_restore and not (
+            duplicate_cleanup = bool(pb.cleanup_duplicate_collections)
+            needs_posterboard = exact_recovery or duplicate_cleanup or (not raw_descriptor_restore and not (
                 len(pb.tendies) == 0 and pb.videoFile is None
                 and len(tweaks[TweakID.Templates].templates) == 0))
             log_info(f'needs_posterboard={needs_posterboard}, tendies={len(pb.tendies)}, '
                      f'raw_descriptors={len(pb.raw_descriptor_tendies)}, '
                      f'exact_recovery={len(pb.exact_recovery_tendies)}, '
+                     f'duplicate_cleanup={duplicate_cleanup}, '
                      f'videoFile={pb.videoFile is not None}')
 
             # Phase 0: protective backup.
@@ -494,7 +497,7 @@ class DeviceManager:
             prepared_root = None
             pb_from_cache = False
             raw_sparse = os.environ.get("GOLDENNUGGET_NO_PROTECTIVE_BACKUP") == "1"
-            if exact_recovery and raw_sparse:
+            if (exact_recovery or duplicate_cleanup) and raw_sparse:
                 raise NuggetException(
                     "Exact Mercury recovery requires a fresh PosterBoard database backup; "
                     "GOLDENNUGGET_NO_PROTECTIVE_BACKUP cannot be used for this action.")
@@ -557,16 +560,16 @@ class DeviceManager:
             if needs_posterboard and not pb_from_cache and not raw_sparse:
                 if os.environ.get("GOLDENNUGGET_SKIP_PB_BACKUP"):
                     log_warn("GOLDENNUGGET_SKIP_PB_BACKUP=1 set; skipping PosterBoard DB fetch")
-                    if exact_recovery:
+                    if exact_recovery or duplicate_cleanup:
                         raise NuggetException(
                             "Exact Mercury recovery requires a fresh PosterBoard database backup; "
                             "GOLDENNUGGET_SKIP_PB_BACKUP cannot be used for this action.")
                 else:
                     pb_database_ok = await self._backup_posterboard_database(
                         update_label, force=True)
-                    if exact_recovery and not pb_database_ok:
+                    if (exact_recovery or duplicate_cleanup) and not pb_database_ok:
                         raise NuggetException(
-                            "Exact Mercury recovery stopped before making changes: "
+                            "PosterBoard recovery/cleanup stopped before making changes: "
                             "the current PosterBoard database could not be backed up. "
                             "Unlock the iPhone, keep its screen awake, and try again.")
 
@@ -898,6 +901,7 @@ Returns (PreparedBackup, posterboard_db_ok). When the PosterBoard
             return True
         pb = tweaks[TweakID.PosterBoard]
         if (len(pb.tendies) == 0 and not pb.exact_recovery_tendies
+                and not pb.cleanup_duplicate_collections
                 and pb.videoFile is None
                 and len(tweaks[TweakID.Templates].templates) == 0):
             # no wallpapers being added, nothing to back up

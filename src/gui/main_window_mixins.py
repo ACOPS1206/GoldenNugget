@@ -685,6 +685,11 @@ class ApplyMixin:
                     "Nugget", "Exact Mercury Configuration Recovery"),
                 len(pb.exact_recovery_tendies),
             )
+            add(
+                QCoreApplication.translate(
+                    "Nugget", "Duplicate Collections Cleanup"),
+                1 if pb.cleanup_duplicate_collections else 0,
+            )
 
         tmpl = tweaks.get(TweakID.Templates)
         if tmpl is not None:
@@ -1086,4 +1091,3 @@ class ApplyMixin:
             self.ios_apply.set_busy(disabled)
         if disabled or not self.refresh_in_progress:
             self.ui.refreshBtn.setDisabled(disabled)
-

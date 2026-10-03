@@ -91,6 +91,20 @@ class IOSPosterboardPage(QWidget):
         self._exact_recovery_caption.setWordWrap(True)
         reset_layout.addWidget(self._exact_recovery_caption)
 
+        self._duplicate_cleanup_btn = QPushButton(QCoreApplication.translate(
+            "Nugget", "Remove Imported Collections Duplicates"))
+        self._duplicate_cleanup_btn.setCursor(Qt.PointingHandCursor)
+        self._duplicate_cleanup_btn.clicked.connect(self._cleanup_collection_duplicates)
+        reset_layout.addWidget(self._duplicate_cleanup_btn)
+
+        self._duplicate_cleanup_caption = QLabel(QCoreApplication.translate(
+            "Nugget",
+            "Removes only the 19 unselected Collections registrations created by "
+            "the earlier import attempts. Original descriptors and Mercury wallpapers stay intact."
+        ))
+        self._duplicate_cleanup_caption.setWordWrap(True)
+        reset_layout.addWidget(self._duplicate_cleanup_caption)
+
         layout.addWidget(reset_card)
 
         # Tab bar
@@ -166,6 +180,9 @@ class IOSPosterboardPage(QWidget):
             f"color: {c.text_secondary}; font-size: 12px;")
         self._exact_recovery_btn.setStyleSheet(self._raw_restore_btn.styleSheet())
         self._exact_recovery_caption.setStyleSheet(
+            f"color: {c.text_secondary}; font-size: 12px;")
+        self._duplicate_cleanup_btn.setStyleSheet(self._raw_restore_btn.styleSheet())
+        self._duplicate_cleanup_caption.setStyleSheet(
             f"color: {c.text_secondary}; font-size: 12px;")
         self._tab_bar.setStyleSheet(
             f"background-color: {c.bg_primary}; border-top: 1px solid {c.bg_secondary};"
@@ -598,7 +615,8 @@ class IOSPosterboardPage(QWidget):
     def show_add_tendies_dialog(self):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         if (tweaks[TweakID.PosterBoard].raw_descriptor_tendies or
-                tweaks[TweakID.PosterBoard].exact_recovery_tendies):
+                tweaks[TweakID.PosterBoard].exact_recovery_tendies or
+                tweaks[TweakID.PosterBoard].cleanup_duplicate_collections):
             QMessageBox.warning(
                 self.window,
                 QCoreApplication.translate("Nugget", "Raw Restore Scheduled"),
@@ -620,6 +638,13 @@ class IOSPosterboardPage(QWidget):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         pb = tweaks[TweakID.PosterBoard]
+        if pb.cleanup_duplicate_collections:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "Duplicate Cleanup Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear or apply the pending duplicate cleanup first."))
+            return
         if pb.exact_recovery_tendies:
             QMessageBox.warning(
                 self.window,
@@ -710,6 +735,13 @@ class IOSPosterboardPage(QWidget):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         pb = tweaks[TweakID.PosterBoard]
+        if pb.cleanup_duplicate_collections:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "Duplicate Cleanup Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear or apply the pending duplicate cleanup first."))
+            return
         if pb.exact_recovery_tendies:
             answer = QMessageBox.question(
                 self.window,
@@ -779,6 +811,67 @@ class IOSPosterboardPage(QWidget):
         QMessageBox.information(
             self.window,
             QCoreApplication.translate("Nugget", "Exact Recovery Scheduled"),
+            QCoreApplication.translate(
+                "Nugget", "Click Apply Tweaks while the iPhone is unlocked and awake."))
+
+    def _cleanup_collection_duplicates(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        pb = tweaks[TweakID.PosterBoard]
+        if pb.cleanup_duplicate_collections:
+            answer = QMessageBox.question(
+                self.window,
+                QCoreApplication.translate("Nugget", "Clear Duplicate Cleanup"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear the scheduled duplicate cleanup?"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+            if answer == QMessageBox.Yes:
+                pb.cleanup_duplicate_collections = False
+                self._duplicate_cleanup_btn.setText(QCoreApplication.translate(
+                    "Nugget", "Remove Imported Collections Duplicates"))
+            return
+        if (pb.tendies or pb.raw_descriptor_tendies or pb.exact_recovery_tendies
+                or pb.videoFile is not None or pb.resetModes or pb.full_reset):
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "PosterBoard Action Scheduled"),
+                QCoreApplication.translate(
+                    "Nugget", "Clear or apply the other PosterBoard action first."))
+            return
+        try:
+            is_ios26 = Version("26.0") <= Version(
+                self.window.device_manager.get_current_device_version()) < Version("27.0")
+        except Exception:
+            is_ios26 = False
+        if not is_ios26:
+            QMessageBox.warning(
+                self.window,
+                QCoreApplication.translate("Nugget", "iOS 26 Only"),
+                QCoreApplication.translate(
+                    "Nugget", "Duplicate Collections cleanup requires a connected iOS 26 device."))
+            return
+        answer = QMessageBox.warning(
+            self.window,
+            QCoreApplication.translate("Nugget", "Schedule Duplicate Cleanup"),
+            QCoreApplication.translate(
+                "Nugget",
+                "GoldenNugget will first back up the current PosterBoard database. "
+                "It will then remove only the 19 known Collections registrations "
+                "created by previous imports. If any target is selected or belongs "
+                "to another provider, cleanup stops before restore.\n\n"
+                "Original descriptors, all Mercury wallpapers, and configuration "
+                "files are preserved. Schedule cleanup?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        pb.cleanup_duplicate_collections = True
+        self._duplicate_cleanup_btn.setText(QCoreApplication.translate(
+            "Nugget", "Duplicate Cleanup Scheduled (19 registrations)"))
+        QMessageBox.information(
+            self.window,
+            QCoreApplication.translate("Nugget", "Duplicate Cleanup Scheduled"),
             QCoreApplication.translate(
                 "Nugget", "Click Apply Tweaks while the iPhone is unlocked and awake."))
 

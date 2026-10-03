@@ -24,11 +24,34 @@ from src.exceptions.posterboard_exceptions import PBTemplateException
 from src.devicemanagement.constants import Version
 
 class PosterboardTweak(Tweak):
+    DUPLICATE_COLLECTION_UUIDS = (
+        "687D97F2-E069-413C-9895-DDB42F142097",
+        "D82670D3-B32D-4A16-A598-694AED2BB740",
+        "C2D877BB-D3B3-488D-BD37-ACC003391A05",
+        "7AC1A0C6-8AC4-4C60-9506-E79C50E56D57",
+        "EECC2B5C-A59E-43D5-BE95-B6F33E0AD260",
+        "3D45C76B-B851-47C6-A8B8-9971EFFF46C9",
+        "B209EF2D-4467-47B3-A952-2ED8EC89B4CF",
+        "159E03F6-BC92-4388-BFB3-FDDC11B9DC23",
+        "49B08FAB-EB59-475A-9DD2-F4B1C3E59874",
+        "69656E93-0B3F-4CF6-95BC-D9944AB51F62",
+        "D0CC6753-C3FD-4421-8916-BA1155FEB4C7",
+        "84EFB0BB-9413-4CA6-9B84-77B25AF9F4F3",
+        "A0E48287-64EA-4A28-8427-38B38630784E",
+        "3BF3F1FC-BF21-43DD-9D70-4AF0B5C5E297",
+        "CEAF1071-2043-4C94-9195-7A4490C48BEC",
+        "A4EA59EE-A365-43F2-9D20-1AF13D004419",
+        "B763084A-B75B-4C93-A522-6F535D0344D1",
+        "5DBAD8A6-5C56-43B0-B588-589E1CA5588E",
+        "A27D6D24-543B-47F1-91D6-1AE68ACE0467",
+    )
+
     def __init__(self):
         super().__init__(key=None)
         self.tendies: list[TendieFile] = []
         self.raw_descriptor_tendies: list[RawDescriptorTendie] = []
         self.exact_recovery_tendies: list[ExactConfigurationTendie] = []
+        self.cleanup_duplicate_collections = False
         self.videoThumbnail = None
         self.videoFile = None
         self.loop_video = True
@@ -46,6 +69,7 @@ class PosterboardTweak(Tweak):
         return (len(self.tendies) > 0 or self.videoFile != None
                 or len(self.raw_descriptor_tendies) > 0
                 or len(self.exact_recovery_tendies) > 0
+                or self.cleanup_duplicate_collections
                 or len(self.resetModes) > 0 or self.full_reset)
     
     def is_empty(self) -> bool:
@@ -78,7 +102,8 @@ class PosterboardTweak(Tweak):
         the normal configuration conversion and identifier randomization stay
         unchanged.
         """
-        if (self.tendies or self.exact_recovery_tendies or self.videoFile is not None
+        if (self.tendies or self.exact_recovery_tendies
+                or self.cleanup_duplicate_collections or self.videoFile is not None
                 or self.resetModes or self.full_reset):
             raise NuggetException(
                 "Raw descriptor restore cannot be combined with other PosterBoard "
@@ -93,7 +118,8 @@ class PosterboardTweak(Tweak):
 
     def add_exact_recovery_tendie(self, file: str):
         """Queue a byte-preserving configuration plus narrow DB registration."""
-        if (self.tendies or self.raw_descriptor_tendies or self.videoFile is not None
+        if (self.tendies or self.raw_descriptor_tendies
+                or self.cleanup_duplicate_collections or self.videoFile is not None
                 or self.resetModes or self.full_reset):
             raise NuggetException(
                 "Exact configuration recovery cannot be combined with other "
@@ -313,6 +339,15 @@ class PosterboardTweak(Tweak):
         # to 61 (the oldest supported layout) when no DB was fetched.
         self.structure_version = self.config_manager.structure_version if (
             getattr(self.config_manager, "structure_version", 0)) else 61
+        if self.cleanup_duplicate_collections:
+            self._apply_duplicate_cleanup(
+                files_to_restore=files_to_restore,
+                output_dir=output_dir,
+                templates=templates,
+                version=version,
+                update_label=update_label,
+            )
+            return
         if self.exact_recovery_tendies:
             self._apply_exact_recovery(
                 files_to_restore=files_to_restore,
@@ -555,3 +590,36 @@ class PosterboardTweak(Tweak):
             domain=f"AppDomain-{self.bundle_id}"))
         update_label(QCoreApplication.tr(
             "Registering the recovered configuration without replacing the database..."))
+
+    def _apply_duplicate_cleanup(self, files_to_restore, output_dir, templates,
+                                 version, update_label):
+        """Remove only the known unselected Collections rows from failed imports."""
+        if not (Version("26.0") <= Version(version) < Version("27.0")):
+            raise NuggetException("Duplicate Collections cleanup is available only on iOS 26.")
+        posterboard_templates = [
+            template for template in templates
+            if template.domain in (
+                "com.apple.PosterBoard", "AppDomain-com.apple.PosterBoard")]
+        if (self.tendies or self.raw_descriptor_tendies or self.exact_recovery_tendies
+                or self.videoFile is not None or self.resetModes or self.full_reset
+                or posterboard_templates):
+            raise NuggetException(
+                "Duplicate cleanup cannot be combined with imports, templates, "
+                "video wallpapers, exact recovery, or resets.")
+        update_label(QCoreApplication.tr("Preparing duplicate Collections cleanup..."))
+        staged_db, removed = self.config_manager.remove_exact_registrations(
+            "com.apple.WallpaperKit.CollectionsPoster",
+            list(self.DUPLICATE_COLLECTION_UUIDS),
+            output_dir)
+        db_path = (f"/Library/Application Support/PRBPosterExtensionDataStore/"
+                   f"{self.structure_version}/{DB_FILE_NAME}")
+        files_to_restore.append(FileToRestore(
+            contents=None, contents_path=staged_db, restore_path=db_path,
+            domain=f"AppDomain-{self.bundle_id}"))
+        for suffix in ("-wal", "-shm"):
+            files_to_restore.append(FileToRestore(
+                contents=b"", restore_path=db_path + suffix,
+                domain=f"AppDomain-{self.bundle_id}"))
+        update_label(QCoreApplication.tr(
+            "Removing {0} duplicate Collections registrations..."
+        ).format(len(removed)))

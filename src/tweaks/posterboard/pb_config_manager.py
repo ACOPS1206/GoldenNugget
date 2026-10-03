@@ -486,3 +486,51 @@ class PBConfigManager:
         finally:
             conn.close()
         return self.staged_database
+
+    def remove_exact_registrations(self, provider: str, uuids: list[str],
+                                   output_dir: Optional[str] = None) -> tuple[str, list[str]]:
+        """Remove only verified, unselected registration rows from a fresh DB."""
+        if self.database is None or not _validate_posterboard_db(self.database):
+            raise NuggetException(
+                "A fresh PosterBoard database is required for duplicate cleanup. "
+                "Unlock the device and try Apply again.")
+        cleanup_dir = output_dir or QStandardPaths.writableLocation(
+            QStandardPaths.AppDataLocation)
+        self.staged_database = path.join(cleanup_dir, f"CLEANUP-{DB_FILE_NAME}")
+        shutil.copyfile(self.database, self.staged_database)
+        conn = sqlite3.connect(self.staged_database, timeout=10)
+        removed = []
+        try:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            for item_uuid in uuids:
+                row = cursor.execute(
+                    "SELECT providerId FROM poster WHERE UUID = ?", (item_uuid,)).fetchone()
+                if row is None:
+                    continue
+                if row[0] != provider:
+                    raise NuggetException(
+                        f"Cleanup stopped: {item_uuid} belongs to unexpected provider {row[0]}.")
+                selected = cursor.execute(
+                    "SELECT 1 FROM posterAttributes WHERE posterUUID = ? "
+                    "AND attributeIdentifier = 'SELECTED' AND attributePayload = 1",
+                    (item_uuid,)).fetchone()
+                if selected:
+                    raise NuggetException(
+                        f"Cleanup stopped: {item_uuid} is currently selected.")
+                cursor.execute("DELETE FROM posterAttributes WHERE posterUUID = ?", (item_uuid,))
+                cursor.execute("DELETE FROM posterRoleMembership WHERE posterUUID = ?", (item_uuid,))
+                cursor.execute("DELETE FROM poster WHERE UUID = ?", (item_uuid,))
+                removed.append(item_uuid)
+            conn.commit()
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise NuggetException("Duplicate cleanup database failed integrity validation.")
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        if not removed:
+            raise NuggetException("No matching duplicate Collections registrations remain.")
+        return self.staged_database, removed
